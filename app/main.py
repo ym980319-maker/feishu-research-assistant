@@ -1569,7 +1569,19 @@ async def feishu_events(request: Request):
 
         await write_task_record(task_id, task_type, user_text, "处理中")
 
-        if task_type == "深度报告":
+        normalized_user_text = user_text.strip()
+
+        daily_report_commands = {
+            "投研日报",
+            "生成投研日报",
+            "生成日报",
+            "今日投研日报",
+        }
+
+        if normalized_user_text in daily_report_commands:
+            reply_text = await handle_daily_report(normalized_user_text)
+
+        elif task_type == "深度报告":
             knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
 
             if knowledge_text:
