@@ -1,0 +1,430 @@
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+from datetime import datetime
+import os
+import json
+import uuid
+import httpx
+import time
+
+load_dotenv()
+
+app = FastAPI(title="Feishu Research Assistant")
+
+FEISHU_APP_ID = os.getenv("FEISHU_APP_ID")
+FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET")
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+
+FEISHU_BITABLE_APP_TOKEN = os.getenv("FEISHU_BITABLE_APP_TOKEN")
+FEISHU_NEWS_TABLE_ID = os.getenv("FEISHU_NEWS_TABLE_ID")
+FEISHU_TASK_TABLE_ID = os.getenv("FEISHU_TASK_TABLE_ID")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "feishu-research-assistant"}
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+async def get_tenant_access_token() -> str:
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    payload = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(url, json=payload)
+        data = resp.json()
+
+    if data.get("code") != 0:
+        raise RuntimeError(f"获取 tenant_access_token 失败: {data}")
+
+    return data["tenant_access_token"]
+
+
+async def reply_feishu_message(message_id: str, text: str):
+    token = await get_tenant_access_token()
+
+    url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    payload = {
+        "msg_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+    }
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        data = resp.json()
+
+    print("Reply result:", data)
+    return data
+
+
+async def create_bitable_record(table_id: str, fields: dict):
+    if not FEISHU_BITABLE_APP_TOKEN:
+        print("未配置 FEISHU_BITABLE_APP_TOKEN，跳过写入多维表格")
+        return None
+
+    token = await get_tenant_access_token()
+
+    url = (
+        "https://open.feishu.cn/open-apis/bitable/v1/apps/"
+        f"{FEISHU_BITABLE_APP_TOKEN}/tables/{table_id}/records"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+    payload = {"fields": fields}
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        data = resp.json()
+
+    print("Bitable create result:", data)
+    return data
+
+
+def clean_feishu_mention(text: str) -> str:
+    return text.replace("@_user_1", "").strip()
+
+
+def detect_task_type(user_text: str) -> str:
+    if any(k in user_text for k in ["舆情", "新闻", "负面", "正面", "事件", "跟踪"]):
+        return "舆情梳理"
+    if any(k in user_text for k in ["深度报告", "报告", "研究", "分析框架"]):
+        return "深度报告"
+    if any(k in user_text for k in ["研报", "摘要", "总结", "提炼"]):
+        return "研报摘要"
+    return "普通问答"
+
+
+def extract_json_from_text(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    try:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end + 1])
+    except Exception:
+        pass
+
+    return {}
+
+
+async def call_deepseek(user_text: str, task_type: str) -> str:
+    if not DEEPSEEK_API_KEY:
+        return "DeepSeek API Key 还没有配置，请先在服务器 .env 里配置 DEEPSEEK_API_KEY。"
+
+    url = f"{DEEPSEEK_BASE_URL}/chat/completions"
+
+    system_prompt = """
+你是一个金融投研助手，服务对象是金融从业者。
+
+通用要求：
+- 必须用中文回答。
+- 不要编造事实。
+- 信息不足时，明确写“信息不足”。
+- 涉及投资判断时，必须提示“需人工确认”。
+- 回答要结构化，适合直接复制到飞书文档或多维表格。
+"""
+
+    if task_type == "舆情梳理":
+        user_prompt = f"""
+请按金融投研舆情格式，梳理以下需求：
+
+用户需求：
+{user_text}
+
+请严格按以下格式输出：
+
+【舆情梳理】
+
+一、核心结论
+用 3-5 句话总结整体舆情方向、核心变化和投资含义。
+
+二、重点事件
+请列出 3-5 条重点事件。每条按以下格式：
+1. 事件标题：
+摘要：
+情绪方向：正面 / 中性 / 负面
+影响程度：高 / 中 / 低
+相关主体：
+投资含义：
+风险提示：
+
+三、需要人工确认的信息
+列出需要人工进一步核实的数据、公告、新闻来源或市场信息。
+
+四、是否建议进入深度报告
+回答：建议 / 暂不建议，并说明原因。
+
+注意：
+- 不得编造具体新闻、公告、数据。
+- 如果没有给出具体材料，请基于用户给出的主题说明“需要补充新闻来源或材料”。
+"""
+    elif task_type == "深度报告":
+        user_prompt = f"""
+请基于以下需求，生成一份金融投研深度报告初稿框架：
+
+用户需求：
+{user_text}
+
+请按以下格式输出：
+
+【深度报告初稿】
+
+一、核心结论
+
+二、近期事件与舆情
+
+三、行业与公司分析
+
+四、基本面变化
+
+五、估值与市场预期
+
+六、投资建议
+必须标注：需人工确认。
+
+七、风险提示
+
+八、需要补充的数据和材料
+
+注意：
+- 不得编造数据。
+- 信息不足时必须写“信息不足”。
+"""
+    elif task_type == "研报摘要":
+        user_prompt = f"""
+请对以下内容做研报摘要或资料提炼：
+
+用户需求：
+{user_text}
+
+请按以下格式输出：
+
+【研报/资料摘要】
+
+一、核心结论
+
+二、投资逻辑
+
+三、关键数据或事实
+
+四、风险提示
+
+五、可跟踪指标
+
+六、需要人工确认的信息
+"""
+    else:
+        user_prompt = user_text
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.3,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            data = resp.json()
+
+        print("DeepSeek result:", data)
+
+        if "choices" not in data:
+            error_msg = data.get("error", {}).get("message", str(data))
+            return f"DeepSeek 调用失败：{error_msg}"
+
+        return data["choices"][0]["message"]["content"]
+
+    except Exception as e:
+        print("DeepSeek error:", repr(e))
+        return f"调用 DeepSeek 失败：{repr(e)}"
+
+
+async def call_deepseek_for_news_json(user_text: str, model_answer: str) -> dict:
+    url = f"{DEEPSEEK_BASE_URL}/chat/completions"
+
+    prompt = f"""
+请把以下舆情分析内容整理成严格 JSON，用于写入飞书多维表格。
+
+用户原始需求：
+{user_text}
+
+模型分析内容：
+{model_answer}
+
+只输出 JSON，不要输出解释文字。
+
+JSON 字段如下：
+{{
+  "主题": "",
+  "行业": "",
+  "公司/主体": "",
+  "标题": "",
+  "摘要": "",
+  "情绪方向": "正面/中性/负面",
+  "影响程度": "高/中/低",
+  "投资含义": "",
+  "风险提示": ""
+}}
+
+规则：
+- 如果信息不足，字段填写“信息不足”。
+- 情绪方向只能是：正面、中性、负面。
+- 影响程度只能是：高、中、低。
+- 不要编造具体新闻事实。
+"""
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "你是金融投研数据结构化助手，只输出 JSON。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.1,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        data = resp.json()
+
+    print("DeepSeek JSON result:", data)
+
+    if "choices" not in data:
+        return {}
+
+    content = data["choices"][0]["message"]["content"]
+    return extract_json_from_text(content)
+
+
+async def write_task_record(task_id: str, task_type: str, user_text: str, status: str, result_summary: str = "", error_msg: str = ""):
+    if not FEISHU_TASK_TABLE_ID:
+        print("未配置 FEISHU_TASK_TABLE_ID，跳过任务表写入")
+        return
+
+    t = now_ms()
+
+    fields = {
+        "任务ID": task_id,
+        "任务类型": task_type,
+        "原始指令": user_text,
+        "任务状态": status,
+        "创建时间": t,
+        "完成时间": t if status in ["已完成", "失败"] else None,
+        "结果摘要": result_summary[:1000] if result_summary else "",
+        "错误信息": error_msg,
+    }
+
+    await create_bitable_record(FEISHU_TASK_TABLE_ID, fields)
+
+
+async def write_news_record(user_text: str, model_answer: str):
+    if not FEISHU_NEWS_TABLE_ID:
+        print("未配置 FEISHU_NEWS_TABLE_ID，跳过舆情池写入")
+        return
+
+    news_json = await call_deepseek_for_news_json(user_text, model_answer)
+
+    if isinstance(news_json, list):
+        news_json = news_json[0] if news_json and isinstance(news_json[0], dict) else {}
+
+    if not isinstance(news_json, dict):
+        news_json = {}
+
+    t = now_ms()
+
+    fields = {
+        "日期": t,
+        "主题": news_json.get("主题", "信息不足"),
+        "行业": news_json.get("行业", "信息不足"),
+        "公司/主体": news_json.get("公司/主体", "信息不足"),
+        "标题": news_json.get("标题", "信息不足"),
+        "摘要": news_json.get("摘要", "信息不足"),
+        "情绪方向": news_json.get("情绪方向", "中性"),
+        "影响程度": news_json.get("影响程度", "中"),
+        "投资含义": news_json.get("投资含义", "信息不足"),
+        "风险提示": news_json.get("风险提示", "信息不足"),
+        "人工确认状态": "待确认",
+        "是否生成报告": False,
+    }
+
+    await create_bitable_record(FEISHU_NEWS_TABLE_ID, fields)
+
+
+@app.post("/feishu/events")
+async def feishu_events(request: Request):
+    body = await request.json()
+
+    if body.get("type") == "url_verification":
+        return JSONResponse({"challenge": body.get("challenge")})
+
+    print("Received Feishu event:", body)
+
+    try:
+        event = body.get("event", {})
+        message = event.get("message", {})
+        message_id = message.get("message_id")
+        message_type = message.get("message_type")
+
+        if message_id and message_type == "text":
+            content_raw = message.get("content", "{}")
+            content = json.loads(content_raw)
+            user_text = clean_feishu_mention(content.get("text", ""))
+
+            if not user_text:
+                reply_text = "我收到了，但没有识别到具体问题。你可以说：帮我梳理今天机器人产业链舆情。"
+                await reply_feishu_message(message_id, reply_text)
+                return {"code": 0, "msg": "ok"}
+
+            task_id = str(uuid.uuid4())[:8]
+            task_type = detect_task_type(user_text)
+
+            await write_task_record(task_id, task_type, user_text, "处理中")
+
+            reply_text = await call_deepseek(user_text, task_type)
+
+            if task_type == "舆情梳理":
+                try:
+                    await write_news_record(user_text, reply_text)
+                    reply_text = reply_text + "\n\n【系统提示】本次舆情分析已写入飞书多维表格“舆情池”，状态：待确认。"
+                except Exception as e:
+                    print("写入舆情池失败:", repr(e))
+                    reply_text = reply_text + f"\n\n【系统提示】写入舆情池失败：{repr(e)}"
+
+            await write_task_record(task_id, task_type, user_text, "已完成", reply_text)
+            await reply_feishu_message(message_id, reply_text)
+
+    except Exception as e:
+        print("处理飞书事件失败:", repr(e))
+
+    return {"code": 0, "msg": "ok"}
