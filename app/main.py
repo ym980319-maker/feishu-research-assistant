@@ -1299,6 +1299,117 @@ async def read_recent_table_records(table_id: str, limit: int = 10) -> list:
     return data.get("data", {}).get("items", [])
 
 
+NEWS_DAILY_FIELDS = (
+    "日期",
+    "主题",
+    "行业",
+    "公司/主体",
+    "标题",
+    "摘要",
+    "情绪方向",
+    "影响程度",
+    "投资含义",
+    "风险提示",
+)
+
+
+def news_field_has_value(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return True
+
+
+def news_date_sort_key(value) -> tuple:
+    if isinstance(value, dict):
+        for key in ("timestamp", "value", "date", "text"):
+            if key in value:
+                return news_date_sort_key(value.get(key))
+        return (0, 0.0)
+
+    if isinstance(value, list):
+        for item in value:
+            parsed = news_date_sort_key(item)
+            if parsed[0]:
+                return parsed
+        return (0, 0.0)
+
+    if isinstance(value, bool) or value is None:
+        return (0, 0.0)
+
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if not (-1e20 < number < 1e20):
+            return (0, 0.0)
+        while abs(number) > 10_000_000_000:
+            number /= 1000
+        return (1, number)
+
+    text = str(value).strip()
+    if not text:
+        return (0, 0.0)
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return (1, datetime.fromisoformat(normalized).timestamp())
+    except ValueError:
+        pass
+
+    for date_format in ("%Y/%m/%d", "%Y%m%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return (1, datetime.strptime(text, date_format).timestamp())
+        except ValueError:
+            continue
+
+    try:
+        return news_date_sort_key(float(text))
+    except ValueError:
+        return (0, 0.0)
+
+
+async def read_recent_news_records(limit: int = 10) -> list:
+    if not FEISHU_NEWS_TABLE_ID or not FEISHU_BITABLE_APP_TOKEN or limit <= 0:
+        return []
+
+    token = await get_tenant_access_token()
+
+    url = (
+        f"https://open.feishu.cn/open-apis/bitable/v1/apps/"
+        f"{FEISHU_BITABLE_APP_TOKEN}/tables/{FEISHU_NEWS_TABLE_ID}/records"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.get(url, headers=headers, params={"page_size": 100})
+
+    data = resp.json()
+    if data.get("code") != 0:
+        print("读取舆情池失败:", data.get("code"), data.get("msg"))
+        return []
+
+    valid_items = []
+    for item in data.get("data", {}).get("items", []):
+        fields = item.get("fields")
+        if not isinstance(fields, dict) or not fields:
+            continue
+        if not any(news_field_has_value(fields.get(name)) for name in NEWS_DAILY_FIELDS):
+            continue
+        valid_items.append(item)
+
+    valid_items.sort(
+        key=lambda item: news_date_sort_key(item.get("fields", {}).get("日期")),
+        reverse=True,
+    )
+    return valid_items[:limit]
+
+
 def format_records_for_daily(title: str, items: list) -> str:
     if not items:
         return f"【{title}】\\n暂无记录。"
@@ -1317,6 +1428,34 @@ def format_records_for_daily(title: str, items: list) -> str:
         parts.append(f"\\n{i}. " + "\\n".join(lines[:8]))
 
     return "\\n".join(parts)
+
+
+def format_news_records_for_daily(items: list) -> str:
+    if not items:
+        return "【最近舆情池记录】\n暂无记录。"
+
+    output_fields = (
+        "日期",
+        "主题",
+        "标题",
+        "摘要",
+        "情绪方向",
+        "影响程度",
+        "投资含义",
+    )
+    parts = ["【最近舆情池记录】"]
+
+    for index, item in enumerate(items, start=1):
+        fields = item.get("fields", {})
+        lines = []
+        for name in output_fields:
+            value = field_to_text(fields.get(name)).strip()
+            if value:
+                lines.append(f"{name}：{value[:300]}")
+        if lines:
+            parts.append(f"\n{index}. " + "\n".join(lines))
+
+    return "\n".join(parts)
 
 def format_market_records_for_daily(items: list) -> str:
     """
@@ -1415,7 +1554,7 @@ async def generate_daily_report(user_text: str) -> str:
         market_items = await read_recent_table_records(FEISHU_MARKET_TABLE_ID, limit=30)
 
     if FEISHU_NEWS_TABLE_ID:
-        news_items = await read_recent_table_records(FEISHU_NEWS_TABLE_ID, limit=10)
+        news_items = await read_recent_news_records(limit=10)
 
     if FEISHU_KNOWLEDGE_TABLE_ID:
         knowledge_items = await read_recent_table_records(FEISHU_KNOWLEDGE_TABLE_ID, limit=10)
@@ -1424,7 +1563,7 @@ async def generate_daily_report(user_text: str) -> str:
         report_items = await read_recent_table_records(FEISHU_REPORT_TABLE_ID, limit=5)
 
     market_text = format_market_records_for_daily(market_items)
-    news_text = format_records_for_daily("最近舆情池记录", news_items)
+    news_text = format_news_records_for_daily(news_items)
     knowledge_text = format_records_for_daily("最近知识库素材", knowledge_items)
     report_text = format_records_for_daily("最近报告库记录", report_items)
 
