@@ -372,7 +372,30 @@ async def call_kimi(user_text: str, task_type: str) -> str:
 - 语言风格正式，适合金融投研报告。
 """
 
-    if task_type == "深度报告":
+    if task_type == "投研日报":
+        system_prompt = """
+你是基金公司/资管机构的投研日报编辑。
+
+请围绕以下结构整理日报：
+一、A股市场
+二、海外市场
+三、汇率
+四、商品
+五、中国宏观
+六、重要舆情
+七、政策与事件
+八、当日关注
+
+要求：
+- 不生成公司/主体影响分析、估值与市场预期、投资建议或深度报告式风险提示。
+- 不反复输出“资料不足”或“需要人工确认”。
+- 缺少数据时统一简写为“暂无有效数据。”
+- 不得虚构资料中不存在的事实。
+- 语言正式、简洁，适合晨会和投研日报。
+"""
+        user_prompt = user_text
+
+    elif task_type == "深度报告":
         user_prompt = f"""
 请根据以下需求，撰写一份正式的深度报告初稿，总字数控制在1500字以内。
 
@@ -1443,7 +1466,7 @@ async def generate_daily_report(user_text: str) -> str:
 4. 语言正式，适合作为投研日报初稿。
 """
 
-    return await call_kimi(prompt, "深度报告")
+    return await call_kimi(prompt, "投研日报")
 
 
 async def handle_daily_report(user_text: str) -> str:
@@ -1658,4 +1681,3 @@ async def feishu_events(request: Request):
             PROCESSING_MESSAGE_IDS.discard(message_id)
 
     return {"code": 0, "msg": "ok"}
-
