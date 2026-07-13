@@ -1207,7 +1207,7 @@ async def handle_query_knowledge(user_text: str) -> str:
     if not records:
         return f"没有在知识库素材中找到与「{keyword}」相关的记录。"
 
-    parts = [f"【知识库查询结果】关键词：{keyword}\\n"]
+    parts = [f"【知识库查询结果】关键词：{keyword}\n"]
 
     for i, fields in enumerate(records, start=1):
         title = field_to_text(fields.get("素材标题"))
@@ -1217,14 +1217,14 @@ async def handle_query_knowledge(user_text: str) -> str:
         summary = field_to_text(fields.get("摘要"))[:300]
 
         parts.append(
-            f"{i}. {title}\\n"
-            f"类型：{material_type}\\n"
-            f"行业：{industry}\\n"
-            f"主体：{subject}\\n"
-            f"摘要：{summary}\\n"
+            f"{i}. {title}\n"
+            f"类型：{material_type}\n"
+            f"行业：{industry}\n"
+            f"主体：{subject}\n"
+            f"摘要：{summary}\n"
         )
 
-    return "\\n".join(parts)
+    return "\n".join(parts)
 
 
 async def handle_query_report(user_text: str) -> str:
@@ -1238,7 +1238,7 @@ async def handle_query_report(user_text: str) -> str:
     if not records:
         return f"没有在报告库中找到与「{keyword}」相关的记录。"
 
-    parts = [f"【报告库查询结果】关键词：{keyword}\\n"]
+    parts = [f"【报告库查询结果】关键词：{keyword}\n"]
 
     for i, fields in enumerate(records, start=1):
         title = field_to_text(fields.get("报告标题"))
@@ -1254,15 +1254,15 @@ async def handle_query_report(user_text: str) -> str:
             link = field_to_text(doc_link)
 
         parts.append(
-            f"{i}. {title}\\n"
-            f"类型：{report_type}\\n"
-            f"行业：{industry}\\n"
-            f"主体：{subject}\\n"
-            f"核心结论：{conclusion}\\n"
-            f"文档链接：{link}\\n"
+            f"{i}. {title}\n"
+            f"类型：{report_type}\n"
+            f"行业：{industry}\n"
+            f"主体：{subject}\n"
+            f"核心结论：{conclusion}\n"
+            f"文档链接：\n{link}\n"
         )
 
-    return "\\n".join(parts)
+    return "\n".join(parts)
 
 
 
@@ -1620,12 +1620,12 @@ async def handle_daily_report(user_text: str) -> str:
 
         return (
             report_text
-            + f"\\n\\n【系统提示】已创建飞书文档：{doc_url}"
-            + "\\n【系统提示】本次投研日报已写入报告库，状态：草稿。"
+            + f"\n\n【系统提示】已创建飞书文档：\n{doc_url}"
+            + "\n\n【系统提示】本次投研日报已写入报告库，状态：草稿。"
         )
     except Exception as e:
         print("生成投研日报归档失败:", repr(e))
-        return report_text + f"\\n\\n【系统提示】生成投研日报归档失败：{repr(e)}"
+        return report_text + f"\n\n【系统提示】生成投研日报归档失败：{repr(e)}"
 
 
 @app.post("/feishu/events")
@@ -1790,7 +1790,7 @@ async def feishu_events(request: Request):
                 title = "AI深度报告-" + datetime.now().strftime("%Y%m%d-%H%M")
                 doc_url = await create_feishu_doc(title, reply_text)
                 await write_report_record(user_text, reply_text, doc_url)
-                reply_text = reply_text + f"\n\n【系统提示】已创建飞书文档：{doc_url}\n【系统提示】本次深度报告已写入飞书多维表格“报告库”，状态：草稿。"
+                reply_text = reply_text + f"\n\n【系统提示】已创建飞书文档：\n{doc_url}\n\n【系统提示】本次深度报告已写入飞书多维表格“报告库”，状态：草稿。"
             except Exception as e:
                 print("创建飞书文档或写入报告库失败:", repr(e))
                 reply_text = reply_text + f"\n\n【系统提示】创建飞书文档或写入报告库失败：{repr(e)}"
