@@ -1632,11 +1632,16 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
     from app.providers.registry import official_research_enabled
 
     official_enabled = official_research_enabled()
-    subject = None
+    subject = {}
     if official_enabled:
         from app.providers import extract_research_subject
 
-        subject = extract_research_subject(user_text)
+        try:
+            extracted_subject = extract_research_subject(user_text)
+            if isinstance(extracted_subject, dict):
+                subject = extracted_subject
+        except Exception as exc:
+            print("提取研究主体失败，继续生成深度报告:", type(exc).__name__)
 
     knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
 
@@ -1677,13 +1682,8 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
         or ""
     ).strip()
 
-    news_items = []
-    if FEISHU_NEWS_TABLE_ID:
-        news_items = await read_recent_news_records(limit=10)
-    news_text = format_news_records_for_daily(news_items)
-
     history_records = []
-    if FEISHU_REPORT_TABLE_ID:
+    if FEISHU_REPORT_TABLE_ID and query:
         history_records = await query_bitable_records(
             FEISHU_REPORT_TABLE_ID,
             query,
@@ -1700,18 +1700,26 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
             f"公司/主体：{field_to_text(fields.get('公司/主体'))}\n"
             f"核心结论：{field_to_text(fields.get('核心结论'))[:500]}"
         )
-    history_text = "\n\n".join(history_parts) or "暂无相关历史报告。"
+    if history_parts:
+        history_text = "\n\n".join(history_parts)
+    elif not query:
+        history_text = "未识别到有效研究主体，未查询历史报告。"
+    else:
+        history_text = "暂无相关历史报告。"
 
+    evidence = []
+    official_evidence = ""
     try:
         evidence = await collect_official_evidence(user_text)
+        if evidence:
+            official_evidence = format_evidence_for_report(evidence)
     except Exception as exc:
-        print("读取官方资料失败，继续生成深度报告:", type(exc).__name__)
+        print("读取或格式化官方资料失败，继续生成深度报告:", type(exc).__name__)
         evidence = []
 
     official_section = ""
     source_instruction = ""
-    if evidence:
-        official_evidence = format_evidence_for_report(evidence)
+    if evidence and official_evidence:
         official_section = f"""
 =================
 
@@ -1732,9 +1740,6 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 【知识库参考资料】
 {knowledge_text or '暂无相关知识库资料。'}
 
-【舆情池参考资料】
-{news_text}
-
 【历史报告参考资料】
 {history_text}
 {official_section}
@@ -1752,7 +1757,10 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
     if knowledge_text:
         reply_text += "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
     if evidence:
-        reply_text += "\n\n" + format_evidence_index(evidence)
+        try:
+            reply_text += "\n\n" + format_evidence_index(evidence)
+        except Exception as exc:
+            print("格式化官方资料索引失败，继续返回深度报告:", type(exc).__name__)
     return reply_text
 
 
