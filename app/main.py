@@ -1628,6 +1628,145 @@ async def handle_daily_report(user_text: str) -> str:
         return report_text + f"\n\n【系统提示】生成投研日报归档失败：{repr(e)}"
 
 
+async def generate_deep_report(user_text: str, task_type: str) -> str:
+    from app.providers.registry import official_research_enabled
+
+    official_enabled = official_research_enabled()
+    subject = {}
+    if official_enabled:
+        from app.providers import extract_research_subject
+
+        try:
+            extracted_subject = extract_research_subject(user_text)
+            if isinstance(extracted_subject, dict):
+                subject = extracted_subject
+        except Exception as exc:
+            print("提取研究主体失败，继续生成深度报告:", type(exc).__name__)
+
+    knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
+
+    if not official_enabled:
+        if knowledge_text:
+            enhanced_prompt = f"""
+用户原始指令：
+{user_text}
+
+以下是飞书多维表格“知识库素材”中沉淀的历史研报、资料、纪要和摘要，请优先参考，但不要机械照搬。
+
+【知识库参考资料】
+{knowledge_text}
+
+请基于用户指令和知识库参考资料，生成一篇正式的金融投研深度报告。
+
+要求：
+1. 优先使用知识库中已有事实和逻辑。
+2. 不得编造知识库和用户指令中没有的数据。
+3. 对无法确认的信息，必须写“信息不足”或“需人工确认”。
+4. 报告结构应包括：核心结论、行业背景、产业链分析、公司/主体分析、投资逻辑、风险提示、后续跟踪指标。
+5. 语言正式，适合作为投研初稿。
+"""
+            reply_text = await call_kimi(enhanced_prompt, task_type)
+            return reply_text + "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
+        return await call_kimi(user_text, task_type)
+
+    from app.providers import (
+        collect_official_evidence,
+        format_evidence_for_report,
+        format_evidence_index,
+    )
+
+    query = str(
+        subject.get("issuer")
+        or subject.get("stock_code")
+        or subject.get("query")
+        or ""
+    ).strip()
+
+    history_records = []
+    if FEISHU_REPORT_TABLE_ID and query:
+        try:
+            history_records = await query_bitable_records(
+                FEISHU_REPORT_TABLE_ID,
+                query,
+                limit=10,
+            )
+        except Exception as exc:
+            print("查询历史报告失败，继续生成深度报告:", type(exc).__name__)
+
+    history_parts = []
+    for index, fields in enumerate(history_records, start=1):
+        history_parts.append(
+            f"【历史报告 {index}】\n"
+            f"报告标题：{field_to_text(fields.get('报告标题'))}\n"
+            f"报告类型：{field_to_text(fields.get('报告类型'))}\n"
+            f"行业：{field_to_text(fields.get('行业'))}\n"
+            f"公司/主体：{field_to_text(fields.get('公司/主体'))}\n"
+            f"核心结论：{field_to_text(fields.get('核心结论'))[:500]}"
+        )
+    if history_parts:
+        history_text = "\n\n".join(history_parts)
+    elif not query:
+        history_text = "未识别到有效研究主体，未查询历史报告。"
+    else:
+        history_text = "暂无相关历史报告。"
+
+    evidence = []
+    official_evidence = ""
+    try:
+        evidence = await collect_official_evidence(user_text)
+        if evidence:
+            official_evidence = format_evidence_for_report(evidence)
+    except Exception as exc:
+        print("读取或格式化官方资料失败，继续生成深度报告:", type(exc).__name__)
+        evidence = []
+
+    official_section = ""
+    source_instruction = ""
+    if evidence and official_evidence:
+        official_section = f"""
+=================
+
+官方资料：
+
+{official_evidence}
+
+=================
+"""
+        source_instruction = (
+            "5. 官方资料来源索引由系统另行追加，正文不要生成、改写或补充来源清单。"
+        )
+
+    prompt = f"""
+用户原始指令：
+{user_text}
+
+【知识库参考资料】
+{knowledge_text or '暂无相关知识库资料。'}
+
+【历史报告参考资料】
+{history_text}
+{official_section}
+请基于用户指令和以上资料，生成一篇正式的金融投研深度报告。
+
+要求：
+1. 优先使用输入资料中已有事实和逻辑，不得编造不存在的数据、事实、日期或链接。
+2. 对无法确认的信息，必须写“信息不足”或“需人工确认”。
+3. 报告结构应包括：核心结论、行业背景、产业链分析、公司/主体分析、投资逻辑、风险提示、后续跟踪指标。
+4. 语言正式，适合作为投研初稿。
+{source_instruction}
+"""
+
+    reply_text = await call_kimi(prompt, task_type)
+    if knowledge_text:
+        reply_text += "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
+    if evidence and official_evidence:
+        try:
+            reply_text += "\n\n" + format_evidence_index(evidence)
+        except Exception as exc:
+            print("格式化官方资料索引失败，继续返回深度报告:", type(exc).__name__)
+    return reply_text
+
+
 @app.post("/feishu/events")
 async def feishu_events(request: Request):
     body = await request.json()
@@ -1745,31 +1884,7 @@ async def feishu_events(request: Request):
             reply_text = await handle_daily_report(normalized_user_text)
 
         elif task_type == "深度报告":
-            knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
-
-            if knowledge_text:
-                enhanced_prompt = f"""
-用户原始指令：
-{user_text}
-
-以下是飞书多维表格“知识库素材”中沉淀的历史研报、资料、纪要和摘要，请优先参考，但不要机械照搬。
-
-【知识库参考资料】
-{knowledge_text}
-
-请基于用户指令和知识库参考资料，生成一篇正式的金融投研深度报告。
-
-要求：
-1. 优先使用知识库中已有事实和逻辑。
-2. 不得编造知识库和用户指令中没有的数据。
-3. 对无法确认的信息，必须写“信息不足”或“需人工确认”。
-4. 报告结构应包括：核心结论、行业背景、产业链分析、公司/主体分析、投资逻辑、风险提示、后续跟踪指标。
-5. 语言正式，适合作为投研初稿。
-"""
-                reply_text = await call_kimi(enhanced_prompt, task_type)
-                reply_text = reply_text + "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
-            else:
-                reply_text = await call_kimi(user_text, task_type)
+            reply_text = await generate_deep_report(user_text, task_type)
 
         elif task_type == "研报摘要":
             reply_text = await call_kimi(user_text, task_type)
@@ -1821,4 +1936,3 @@ async def feishu_events(request: Request):
             PROCESSING_MESSAGE_IDS.discard(message_id)
 
     return {"code": 0, "msg": "ok"}
-
