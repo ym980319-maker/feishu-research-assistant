@@ -104,6 +104,19 @@ class DeepReportNewsIntegrationTests(unittest.IsolatedAsyncioTestCase):
         query.assert_awaited_once_with("300750", limit=20)
         self.assertIn("公司公告线索", output)
 
+    async def test_record_without_subject_field_matches_other_fields(self) -> None:
+        record = news_record("宁德时代产品进展")
+        record.pop("公司/主体")
+        with patch.object(
+            main, "query_subject_news_records", AsyncMock(return_value=[record])
+        ), patch.object(main, "FEISHU_NEWS_TABLE_ID", "news-table"):
+            output = await main.read_subject_news_for_deep_report(
+                {"issuer": "宁德时代", "stock_code": None},
+                limit=5,
+            )
+
+        self.assertIn("宁德时代产品进展", output)
+
     async def test_server_query_uses_subject_filter(self) -> None:
         response = MagicMock()
         response.json.return_value = {
@@ -135,9 +148,40 @@ class DeepReportNewsIntegrationTests(unittest.IsolatedAsyncioTestCase):
         conditions = kwargs["json"]["filter"]["conditions"]
         self.assertEqual(
             {condition["field_name"] for condition in conditions},
-            {"标题", "主题", "摘要", "公司/主体"},
+            {"标题", "主题", "摘要"},
         )
+        self.assertNotIn("公司/主体", kwargs["json"]["field_names"])
         self.assertTrue(all(condition["value"] == ["宁德时代"] for condition in conditions))
+
+    async def test_http_status_error_returns_empty_records(self) -> None:
+        request = main.httpx.Request("POST", "https://open.feishu.cn/test")
+        http_response = main.httpx.Response(500, request=request)
+        response = MagicMock()
+        response.raise_for_status.side_effect = main.httpx.HTTPStatusError(
+            "server error",
+            request=request,
+            response=http_response,
+        )
+        client = AsyncMock()
+        client.post.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=client)
+        context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch.object(
+            main, "get_tenant_access_token", AsyncMock(return_value="token")
+        ), patch.object(
+            main.httpx, "AsyncClient", return_value=context
+        ), patch.object(
+            main, "FEISHU_BITABLE_APP_TOKEN", "app-token"
+        ), patch.object(
+            main, "FEISHU_NEWS_TABLE_ID", "news-table"
+        ):
+            records = await main.query_subject_news_records("宁德时代", limit=20)
+
+        response.raise_for_status.assert_called_once_with()
+        response.json.assert_not_called()
+        self.assertEqual(records, [])
 
     async def test_empty_subject_does_not_query_news(self) -> None:
         query = AsyncMock()

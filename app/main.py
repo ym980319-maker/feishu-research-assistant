@@ -1647,13 +1647,12 @@ async def query_subject_news_records(keyword: str, limit: int = 20) -> list:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json; charset=utf-8",
         }
-        searchable_fields = ("标题", "主题", "摘要", "公司/主体")
+        searchable_fields = ("标题", "主题", "摘要")
         payload = {
             "field_names": [
                 "标题",
                 "主题",
                 "摘要",
-                "公司/主体",
                 "情绪方向",
                 "影响程度",
                 "日期",
@@ -1680,6 +1679,7 @@ async def query_subject_news_records(keyword: str, limit: int = 20) -> list:
                 json=payload,
             )
 
+        resp.raise_for_status()
         data = resp.json()
         if data.get("code") != 0:
             print(
