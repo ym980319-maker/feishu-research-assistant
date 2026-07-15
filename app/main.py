@@ -1628,6 +1628,140 @@ async def handle_daily_report(user_text: str) -> str:
         return report_text + f"\n\n【系统提示】生成投研日报归档失败：{repr(e)}"
 
 
+async def query_subject_news_records(keyword: str, limit: int = 20) -> list:
+    if (
+        not FEISHU_NEWS_TABLE_ID
+        or not FEISHU_BITABLE_APP_TOKEN
+        or not keyword
+        or limit <= 0
+    ):
+        return []
+
+    try:
+        token = await get_tenant_access_token()
+        url = (
+            f"https://open.feishu.cn/open-apis/bitable/v1/apps/"
+            f"{FEISHU_BITABLE_APP_TOKEN}/tables/{FEISHU_NEWS_TABLE_ID}/records/search"
+        )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        searchable_fields = ("标题", "主题", "摘要")
+        payload = {
+            "field_names": [
+                "标题",
+                "主题",
+                "摘要",
+                "情绪方向",
+                "影响程度",
+                "日期",
+            ],
+            "filter": {
+                "conjunction": "or",
+                "conditions": [
+                    {
+                        "field_name": field_name,
+                        "operator": "contains",
+                        "value": [keyword],
+                    }
+                    for field_name in searchable_fields
+                ],
+            },
+            "automatic_fields": False,
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers=headers,
+                params={"page_size": min(limit, 100)},
+                json=payload,
+            )
+
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") != 0:
+            print(
+                "查询深度报告相关舆情失败:",
+                data.get("code"),
+                data.get("msg"),
+            )
+            return []
+
+        items = data.get("data", {}).get("items", [])
+        if not isinstance(items, list):
+            return []
+        return [item.get("fields") for item in items if isinstance(item, dict)]
+    except Exception as exc:
+        print("查询深度报告相关舆情失败，继续生成深度报告:", type(exc).__name__)
+        return []
+
+
+async def read_subject_news_for_deep_report(subject: dict, limit: int = 5) -> str:
+    if not FEISHU_NEWS_TABLE_ID or not isinstance(subject, dict) or limit <= 0:
+        return ""
+
+    issuer = str(subject.get("issuer") or "").strip()
+    stock_code = str(subject.get("stock_code") or "").strip()
+    keywords = list(dict.fromkeys(value for value in (issuer, stock_code) if value))
+    if not keywords:
+        return ""
+
+    candidates = []
+    for keyword in keywords:
+        try:
+            records = await query_subject_news_records(keyword, limit=20)
+        except Exception as exc:
+            print("查询深度报告相关舆情失败，继续生成深度报告:", type(exc).__name__)
+            continue
+        if isinstance(records, list):
+            candidates.extend(records)
+
+    items = []
+    seen = set()
+    max_items = min(limit, 5)
+    normalized_keywords = [keyword.casefold() for keyword in keywords]
+
+    for fields in candidates:
+        if not isinstance(fields, dict):
+            continue
+        try:
+            title = field_to_text(fields.get("标题")).strip()
+            topic = field_to_text(fields.get("主题")).strip()
+            summary = field_to_text(fields.get("摘要")).strip()[:300]
+            subject_text = field_to_text(fields.get("公司/主体")).strip()
+            sentiment = field_to_text(fields.get("情绪方向")).strip()
+            impact = field_to_text(fields.get("影响程度")).strip()
+            published_at = field_to_text(fields.get("日期")).strip()
+            searchable = "\n".join((title, topic, summary, subject_text)).casefold()
+        except Exception:
+            continue
+
+        if not any(keyword in searchable for keyword in normalized_keywords):
+            continue
+        if not any((title, topic, summary, sentiment, impact, published_at)):
+            continue
+
+        identity = (title, topic, summary, sentiment, impact, published_at)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        items.append(
+            f"【相关舆情 {len(items) + 1}】\n"
+            f"标题：{title}\n"
+            f"主题：{topic}\n"
+            f"摘要：{summary}\n"
+            f"情绪方向：{sentiment}\n"
+            f"影响程度：{impact}\n"
+            f"日期：{published_at}"
+        )
+        if len(items) >= max_items:
+            break
+
+    return "\n\n".join(items)
+
+
 async def generate_deep_report(user_text: str, task_type: str) -> str:
     from app.providers.registry import official_research_enabled
 
@@ -1710,6 +1844,8 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
     else:
         history_text = "暂无相关历史报告。"
 
+    news_text = await read_subject_news_for_deep_report(subject, limit=5)
+
     evidence = []
     official_evidence = ""
     try:
@@ -1721,7 +1857,7 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
         evidence = []
 
     official_section = ""
-    source_instruction = ""
+    additional_instructions = []
     if evidence and official_evidence:
         official_section = f"""
 =================
@@ -1732,9 +1868,25 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 
 =================
 """
-        source_instruction = (
-            "5. 官方资料来源索引由系统另行追加，正文不要生成、改写或补充来源清单。"
+        additional_instructions.append(
+            "官方资料来源索引由系统另行追加，正文不要生成、改写或补充来源清单。"
         )
+
+    news_section = ""
+    if news_text:
+        news_section = f"""
+【舆情池参考资料】
+{news_text}
+"""
+        additional_instructions.append(
+            "舆情仅用于市场关注和事件线索；官方资料优先级高于舆情池，"
+            "未经官方资料确认的内容不得写成确定事实，舆情与官方资料冲突时以官方资料为准。"
+        )
+
+    additional_requirements = "\n".join(
+        f"{index}. {instruction}"
+        for index, instruction in enumerate(additional_instructions, start=5)
+    )
 
     prompt = f"""
 用户原始指令：
@@ -1746,6 +1898,7 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 【历史报告参考资料】
 {history_text}
 {official_section}
+{news_section}
 请基于用户指令和以上资料，生成一篇正式的金融投研深度报告。
 
 要求：
@@ -1753,7 +1906,7 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 2. 对无法确认的信息，必须写“信息不足”或“需人工确认”。
 3. 报告结构应包括：核心结论、行业背景、产业链分析、公司/主体分析、投资逻辑、风险提示、后续跟踪指标。
 4. 语言正式，适合作为投研初稿。
-{source_instruction}
+{additional_requirements}
 """
 
     reply_text = await call_kimi(prompt, task_type)
