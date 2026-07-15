@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import sys
 from types import ModuleType
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 class _FastAPI:
@@ -264,6 +264,32 @@ class DeepReportOfficialIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         read_history.assert_not_awaited()
 
+    async def test_history_lookup_exception_still_calls_kimi(self) -> None:
+        kimi = AsyncMock(return_value="报告正文")
+        with patch(
+            "app.providers.registry.official_research_enabled", return_value=True
+        ), patch(
+            "app.providers.extract_research_subject",
+            return_value={"issuer": "宁德时代", "stock_code": None, "query": "宁德时代"},
+        ), patch(
+            "app.providers.collect_official_evidence", AsyncMock(return_value=[])
+        ), patch.object(
+            main, "read_knowledge_records", AsyncMock(return_value="")
+        ), patch.object(
+            main,
+            "query_bitable_records",
+            AsyncMock(side_effect=RuntimeError("history unavailable")),
+        ), patch.object(
+            main, "call_kimi", kimi
+        ), patch.object(
+            main, "FEISHU_REPORT_TABLE_ID", "report-table"
+        ):
+            result = await main.generate_deep_report("深度报告 宁德时代", "深度报告")
+
+        kimi.assert_awaited_once()
+        self.assertIn("暂无相关历史报告。", kimi.await_args.args[0])
+        self.assertEqual(result, "报告正文")
+
     async def test_evidence_formatting_exception_still_calls_kimi(self) -> None:
         kimi = AsyncMock(return_value="报告正文")
         with patch(
@@ -287,6 +313,34 @@ class DeepReportOfficialIntegrationTests(unittest.IsolatedAsyncioTestCase):
             result = await main.generate_deep_report("深度报告 宁德时代", "深度报告")
 
         kimi.assert_awaited_once()
+        self.assertNotIn("官方资料：", kimi.await_args.args[0])
+        self.assertEqual(result, "报告正文")
+
+    async def test_empty_formatted_evidence_does_not_append_index(self) -> None:
+        kimi = AsyncMock(return_value="报告正文")
+        format_index = Mock()
+        with patch(
+            "app.providers.registry.official_research_enabled", return_value=True
+        ), patch(
+            "app.providers.extract_research_subject",
+            return_value={"issuer": "宁德时代", "stock_code": None, "query": "宁德时代"},
+        ), patch(
+            "app.providers.collect_official_evidence",
+            AsyncMock(return_value=[official_evidence()]),
+        ), patch(
+            "app.providers.format_evidence_for_report", return_value=""
+        ), patch(
+            "app.providers.format_evidence_index", format_index
+        ), patch.object(
+            main, "read_knowledge_records", AsyncMock(return_value="")
+        ), patch.object(
+            main, "call_kimi", kimi
+        ), patch.object(
+            main, "FEISHU_REPORT_TABLE_ID", None
+        ):
+            result = await main.generate_deep_report("深度报告 宁德时代", "深度报告")
+
+        format_index.assert_not_called()
         self.assertNotIn("官方资料：", kimi.await_args.args[0])
         self.assertEqual(result, "报告正文")
 

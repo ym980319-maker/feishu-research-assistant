@@ -1684,11 +1684,14 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 
     history_records = []
     if FEISHU_REPORT_TABLE_ID and query:
-        history_records = await query_bitable_records(
-            FEISHU_REPORT_TABLE_ID,
-            query,
-            limit=10,
-        )
+        try:
+            history_records = await query_bitable_records(
+                FEISHU_REPORT_TABLE_ID,
+                query,
+                limit=10,
+            )
+        except Exception as exc:
+            print("查询历史报告失败，继续生成深度报告:", type(exc).__name__)
 
     history_parts = []
     for index, fields in enumerate(history_records, start=1):
@@ -1756,7 +1759,7 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
     reply_text = await call_kimi(prompt, task_type)
     if knowledge_text:
         reply_text += "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
-    if evidence:
+    if evidence and official_evidence:
         try:
             reply_text += "\n\n" + format_evidence_index(evidence)
         except Exception as exc:
