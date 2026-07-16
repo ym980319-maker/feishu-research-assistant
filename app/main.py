@@ -45,6 +45,115 @@ async def health():
     return {"status": "ok", "service": "feishu-research-assistant"}
 
 
+async def check_bitable_read_status(table_id: str | None) -> str:
+    if not table_id or not FEISHU_BITABLE_APP_TOKEN:
+        return "未配置"
+
+    token = await get_tenant_access_token()
+    url = (
+        "https://open.feishu.cn/open-apis/bitable/v1/apps/"
+        f"{FEISHU_BITABLE_APP_TOKEN}/tables/{table_id}/records"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+    async with httpx.AsyncClient(timeout=5) as client:
+        resp = await client.get(url, headers=headers, params={"page_size": 1})
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("code") != 0:
+        raise RuntimeError("FeishuAPIError")
+
+    items = data.get("data", {}).get("items", [])
+    return "可用" if items else "可用（暂无记录）"
+
+
+async def handle_official_research_health() -> str:
+    import asyncio
+    from datetime import timedelta
+
+    from app.providers.registry import (
+        get_enabled_providers,
+        official_research_enabled,
+    )
+
+    provider_labels = {
+        "cninfo": "巨潮资讯 Provider",
+        "miit": "工信部 Provider",
+    }
+    provider_statuses = {
+        name: "未检查（功能关闭）" for name in provider_labels
+    }
+
+    try:
+        enabled = official_research_enabled()
+        feature_status = "开启" if enabled else "关闭"
+    except Exception as exc:
+        enabled = False
+        feature_status = f"异常（{type(exc).__name__}）"
+
+    if enabled:
+        try:
+            providers = {provider.name: provider for provider in get_enabled_providers()}
+        except Exception as exc:
+            providers = {}
+            error_status = f"异常（{type(exc).__name__}）"
+            provider_statuses = {name: error_status for name in provider_labels}
+        else:
+            now = datetime.now().astimezone()
+            subject = {
+                "query": "工业和信息化",
+                "issuer": "平安银行",
+                "stock_code": "000001",
+            }
+            for name in provider_labels:
+                provider = providers.get(name)
+                if provider is None:
+                    provider_statuses[name] = "未启用"
+                    continue
+                try:
+                    results = await asyncio.wait_for(
+                        provider.search(
+                            subject=subject,
+                            since=now - timedelta(days=7),
+                            until=now,
+                            limit=1,
+                        ),
+                        timeout=5,
+                    )
+                    count = len(results)
+                    provider_statuses[name] = (
+                        f"可用（返回 {count} 条）" if count else "可用（暂无结果）"
+                    )
+                except Exception as exc:
+                    provider_statuses[name] = f"异常（{type(exc).__name__}）"
+
+    table_statuses = {}
+    for label, table_id in (
+        ("舆情池", FEISHU_NEWS_TABLE_ID),
+        ("知识库", FEISHU_KNOWLEDGE_TABLE_ID),
+        ("报告库", FEISHU_REPORT_TABLE_ID),
+    ):
+        try:
+            table_statuses[label] = await check_bitable_read_status(table_id)
+        except Exception as exc:
+            table_statuses[label] = f"异常（{type(exc).__name__}）"
+
+    checked_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    return (
+        "【官方资料状态】\n"
+        f"功能开关：{feature_status}\n"
+        f"巨潮资讯 Provider：{provider_statuses['cninfo']}\n"
+        f"工信部 Provider：{provider_statuses['miit']}\n"
+        f"舆情池：{table_statuses['舆情池']}\n"
+        f"知识库：{table_statuses['知识库']}\n"
+        f"报告库：{table_statuses['报告库']}\n"
+        f"检查时间：{checked_at}"
+    )
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -2019,12 +2128,17 @@ async def feishu_events(request: Request):
             PROCESSED_MESSAGE_IDS.add(message_id)
             return {"code": 0, "msg": "ok"}
 
+        normalized_user_text = user_text.strip()
+        if normalized_user_text == "官方资料状态":
+            reply_text = await handle_official_research_health()
+            await reply_feishu_message(message_id, reply_text)
+            PROCESSED_MESSAGE_IDS.add(message_id)
+            return {"code": 0, "msg": "official research health checked"}
+
         task_id = str(uuid.uuid4())[:8]
         task_type = detect_task_type(user_text)
 
         await write_task_record(task_id, task_type, user_text, "处理中")
-
-        normalized_user_text = user_text.strip()
 
         daily_report_commands = {
             "投研日报",
