@@ -609,22 +609,28 @@ async def call_kimi(user_text: str, task_type: str) -> str:
         "Content-Type": "application/json",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=300) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            data = resp.json()
+    for attempt in range(2):
+        try:
+            timeout = httpx.Timeout(connect=15, read=180, write=30, pool=15)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
 
-        print("Kimi result:", data)
+            if "choices" not in data:
+                error_msg = data.get("error", {}).get("message", "未知错误")
+                return f"Kimi 调用失败：{error_msg}"
 
-        if "choices" not in data:
-            error_msg = data.get("error", {}).get("message", str(data))
-            return f"Kimi 调用失败：{error_msg}"
+            return data["choices"][0]["message"]["content"]
 
-        return data["choices"][0]["message"]["content"]
+        except httpx.TimeoutException:
+            if attempt == 1:
+                return "调用 Kimi 超时，请稍后重试"
+            await asyncio.sleep(2)
 
-    except Exception as e:
-        print("Kimi error:", repr(e))
-        return f"调用 Kimi 失败：{repr(e)}"
+        except Exception as exc:
+            print(f"Kimi request failed: {type(exc).__name__}")
+            return "调用 Kimi 失败，请稍后重试"
 
 
 async def call_deepseek_for_news_json(user_text: str, model_answer: str) -> dict:
