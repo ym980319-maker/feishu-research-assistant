@@ -12,6 +12,7 @@ venv/
 # Runtime files
 downloads/
 *.log
+.cache/
 
 # Backups
 *.bak
