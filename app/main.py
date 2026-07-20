@@ -483,33 +483,34 @@ async def call_kimi(user_text: str, task_type: str) -> str:
 
     if task_type == "投研日报":
         system_prompt = """
-你是基金公司或资管机构的投研日报编辑，负责整理适合晨会直接阅读的每日市场简报。
+你是基金公司或资管机构的固收研究员，负责生成适合固收晨会直接阅读的《固收投研日报》。
 
-必须严格按照以下八个板块输出，标题不得改名、合并或省略：
-一、A股市场
-二、海外市场
-三、汇率
-四、商品
-五、中国宏观
-六、重要舆情
-七、政策与事件
-八、当日关注
+必须严格按照以下九个板块输出，标题不得改名、合并或省略：
+一、今日固收核心结论
+二、今日重点关注
+三、资金面与流动性
+四、利率债市场
+五、信用债市场
+六、可转债与跨资产表现
+七、宏观与政策
+八、重要舆情与机构观点
+九、今日关注与风险提示
 
 要求：
-- 每个板块统一采用以下固定格式，不得改变标签名称或顺序：
-  【数据】
-  列出输入材料中的数据、事实或事件。
-
-  【点评】
-  给出一句简短、客观的市场点评。
-- 市场数据必须优先引用输入材料中的真实数值，不得用模糊表述替代已有数值。
-- 某一板块完全没有数据、事实或事件时，该板块只写一行“暂无新增信息。”，不再补充点评。
-- 点评必须严格依据本板块【数据】中的内容生成，不得脱离数据发挥，不得预测未来走势，不得给出投资建议。
-- 不反复输出“资料不足”或“暂无有效数据”。
-- 不生成公司/主体影响分析、估值与市场预期、投资建议、深度报告式风险提示、需要人工确认的信息或需要补充的数据和材料。
-- 不得虚构输入材料中不存在的事实、新闻、政策或数据，也不得把推测写成事实。
-- 语言正式、简洁，减少套话和模板化表达，适合基金公司或资管机构晨会阅读。
-- 全文总字数控制在800—1500字，不在八个板块之外增加前言、总结或其他章节。
+- 只输出一份完整日报，不按资料来源分别生成摘要，不重复输出同一事件或观点。
+- “今日固收核心结论”先给出偏强、偏弱、震荡或分化等方向判断，再用3—5条说明驱动，并明确标注“市场事实”和“研究判断”。
+- 每个重要结论尽量回答：发生了什么、为什么重要、对固收市场的影响、后续观察什么。
+- 市场数据只作为量化事实；舆情池只作为事件线索；知识库只提供历史框架、制度背景和研究逻辑；报告库只提供已有研究观点和深度结论。
+- 历史材料只能用于解释，不能覆盖更新的市场事实，也不得把报告库中的历史日报当作当日新增信息。
+- 信息冲突时，优先采用日期更新者和市场事实；明确指出分歧及证据，不得把冲突观点同时写成最终结论。
+- 对缺失数据必须明确说明，不得编造或推断。
+- 缺少资金利率数据时必须写“暂无新增资金面量化数据”，不得用股票、汇率或商品数据代替资金面指标。
+- 缺少国债收益率、资金利率、信用利差等量化数据时必须如实说明，不得补造。
+- 信用数据不足时可以依据舆情、知识库和报告库作定性判断，但必须明确标注“证据不足”。
+- 股票、汇率和商品数据仅用于解释对固收资产的跨资产影响，不得占据日报主体。
+- 没有可靠重点事件时写“暂无新增重点事件”，不得编造事实、新闻、政策、数据、日期或来源。
+- 只做研究提示，不提供确定性收益承诺或未经验证的买卖建议。
+- 语言正式、简洁，适合基金公司或资管机构固收晨会阅读。
 """
         user_prompt = user_text
 
@@ -1574,81 +1575,82 @@ def format_news_records_for_daily(items: list) -> str:
 
 def format_market_records_for_daily(items: list) -> str:
     """
-    将市场数据按 A股、海外市场、汇率、商品、中国宏观分类展示。
+    将市场数据按固收优先、跨资产辅助的方式分类展示。
+    未识别但具有名称和有效数值的指标保留在“其他市场指标”中。
     """
     if not items:
         return "【最近市场数据】\n暂无记录。"
 
-    group_order = [
-        ("一、A股市场", [
-            "上证指数",
-            "深证成指",
-            "创业板指",
-            "沪深300",
-            "中证500",
-        ]),
-        ("二、海外市场", [
-            "恒生指数",
-            "纳斯达克",
-        ]),
-        ("三、汇率", [
-            "美元兑人民币",
-            "美元指数",
-        ]),
-        ("四、商品", [
-            "布伦特原油",
-            "伦敦金",
-        ]),
-        ("五、中国宏观", [
-            "CPI同比",
-            "PPI同比",
-            "制造业PMI",
-        ]),
-    ]
-
-    records_by_name = {}
+    fixed_income_keywords = (
+        "国债", "政金债", "政金", "国开债", "农发债", "口行债", "国债期货",
+        "dr007", "r007", "shibor", "资金利率", "回购利率", "信用利差",
+        "等级利差", "期限利差", "收益率曲线", "中债", "同业存单",
+        "票据利率", "城投债", "产业债", "可转债", "可交换债",
+    )
+    equity_keywords = (
+        "上证指数", "深证成指", "创业板指", "沪深300", "中证500",
+        "恒生指数", "纳斯达克", "标普500", "道琼斯",
+    )
+    fx_keywords = ("汇率", "美元兑", "人民币", "美元指数", "欧元", "日元")
+    commodity_keywords = ("原油", "黄金", "伦敦金", "铜", "螺纹钢", "商品")
+    macro_keywords = ("cpi", "ppi", "pmi", "社融", "m1", "m2", "工业增加值", "失业率")
+    group_titles = (
+        "固收与资金指标",
+        "权益市场（跨资产参考）",
+        "汇率（跨资产参考）",
+        "商品（跨资产参考）",
+        "宏观数据",
+        "其他市场指标",
+    )
+    grouped_lines = {title: [] for title in group_titles}
 
     for item in items:
         fields = item.get("fields", {})
-        name = field_to_text(fields.get("指标名称"))
-
+        if not isinstance(fields, dict):
+            continue
+        name = field_to_text(fields.get("指标名称")).strip()
         if not name:
             continue
 
-        records_by_name[name] = fields
+        value = ""
+        for field_name in ("数值", "最新值", "收盘价", "收益率", "利率", "利差"):
+            value = field_to_text(fields.get(field_name)).strip()
+            if value:
+                break
+        change = field_to_text(fields.get("涨跌幅")).strip()
+        unit = field_to_text(fields.get("单位")).strip()
+        if not value and not change:
+            continue
+
+        value_text = f"{value}{unit}" if value and unit else value
+        line = f"- {name}"
+        if value_text:
+            line += f"：{value_text}"
+        if change:
+            change_text = change if change.endswith("%") else f"{change}%"
+            line += f"（涨跌幅 {change_text}）"
+
+        normalized_name = name.casefold()
+        if any(keyword in normalized_name for keyword in fixed_income_keywords):
+            group_title = "固收与资金指标"
+        elif any(keyword.casefold() in normalized_name for keyword in equity_keywords):
+            group_title = "权益市场（跨资产参考）"
+        elif any(keyword in normalized_name for keyword in fx_keywords):
+            group_title = "汇率（跨资产参考）"
+        elif any(keyword in normalized_name for keyword in commodity_keywords):
+            group_title = "商品（跨资产参考）"
+        elif any(keyword in normalized_name for keyword in macro_keywords):
+            group_title = "宏观数据"
+        else:
+            group_title = "其他市场指标"
+
+        grouped_lines[group_title].append(line)
 
     parts = ["【最近市场数据】"]
-
-    for group_title, indicator_names in group_order:
-        lines = []
-
-        for name in indicator_names:
-            fields = records_by_name.get(name)
-
-            if not fields:
-                continue
-
-            value = field_to_text(fields.get("数值"))
-            change = field_to_text(fields.get("涨跌幅"))
-            unit = field_to_text(fields.get("单位"))
-
-            value_text = value or "--"
-
-            if unit and value_text != "--":
-                value_text = f"{value_text}{unit}"
-
-            line = f"- {name}：{value_text}"
-
-            if change:
-                change_text = change
-                if not change_text.endswith("%"):
-                    change_text = f"{change_text}%"
-                line += f"（涨跌幅 {change_text}）"
-
-            lines.append(line)
-
+    for group_title in group_titles:
+        lines = grouped_lines[group_title]
         if lines:
-            parts.append(f"\n{group_title}")
+            parts.append(f"\n【{group_title}】")
             parts.extend(lines)
 
     if len(parts) == 1:
@@ -1656,9 +1658,116 @@ def format_market_records_for_daily(items: list) -> str:
 
     return "\n".join(parts)
 
+
+def filter_historical_daily_reports(items: list) -> list:
+    """
+    仅从本次日报的报告库上下文中排除明确属于历史日报的记录。
+    不修改报告库原始记录，也保留其他深度报告。
+    """
+    daily_types = {"日报", "投研日报", "固收日报", "固收投研日报", "市场晨报"}
+    daily_title_markers = ("投研日报", "固收日报", "市场晨报")
+    daily_commands = {
+        "投研日报",
+        "生成投研日报",
+        "生成日报",
+        "今日投研日报",
+        "固收投研日报",
+        "生成固收日报",
+        "今日固收日报",
+    }
+    filtered = []
+
+    for item in items:
+        fields = item.get("fields", {})
+        if not isinstance(fields, dict):
+            continue
+
+        report_type = field_to_text(fields.get("报告类型")).strip()
+        title = field_to_text(fields.get("报告标题")).strip()
+        command = field_to_text(
+            fields.get("原始指令") or fields.get("命令") or fields.get("用户指令")
+        ).strip()
+        is_daily = (
+            report_type in daily_types
+            or any(marker in title for marker in daily_title_markers)
+            or command in daily_commands
+        )
+        if not is_daily:
+            filtered.append(item)
+
+    return filtered
+
+
+def build_fixed_income_daily_fallback(
+    market_items: list,
+    news_items: list,
+    knowledge_items: list,
+    report_items: list,
+) -> str:
+    """模型不可用时返回唯一一份、不编造事实的结构化简版日报。"""
+    news_status = (
+        "已读取舆情线索，但模型服务暂不可用，无法可靠去重和归纳。"
+        if news_items
+        else "暂无有效舆情记录。"
+    )
+    research_status = (
+        "已读取历史研究材料，但模型服务暂不可用，未将其作为当日新增观点。"
+        if knowledge_items or report_items
+        else "暂无可用机构观点。"
+    )
+    market_status = (
+        "已读取市场数据，但模型服务暂不可用，无法形成可靠方向判断。"
+        if market_items
+        else "暂无可用市场量化数据。"
+    )
+
+    return f"""【固收投研日报（简版）】
+
+一、今日固收核心结论
+研究判断：模型服务暂不可用，暂不形成偏强、偏弱、震荡或分化的方向结论。
+市场事实：{market_status}
+
+二、今日重点关注
+暂无新增重点事件。
+
+三、资金面与流动性
+暂无新增资金面量化数据。
+
+四、利率债市场
+暂无可核验的国债收益率、政金债、国债期货或期限利差分析；为什么重要及对债市的影响暂无法可靠判断。
+
+五、信用债市场
+暂无可核验的信用利差、等级利差、供给或风险事件分析，证据不足。
+
+六、可转债与跨资产表现
+暂不根据股票、汇率或商品数据替代固收判断。
+
+七、宏观与政策
+暂无经统一分析确认的新增宏观与政策结论。
+
+八、重要舆情与机构观点
+{news_status}
+{research_status}
+
+九、今日关注与风险提示
+关注模型服务恢复及固收量化数据补充。当前判断可能因资金面、政策、海外市场或信用事件变化而失效；本日报仅作研究提示，不构成确定性收益承诺。"""
+
+
+def daily_report_generation_failed(report_text: str) -> bool:
+    if not isinstance(report_text, str) or not report_text.strip():
+        return True
+    return report_text.strip().startswith(
+        (
+            "Kimi API Key 还没有配置",
+            "Kimi 调用失败：",
+            "调用 Kimi 失败：",
+        )
+    )
+
+
 async def generate_daily_report(user_text: str) -> str:
     """
-    生成投研日报正文。
+    生成固收投研日报正文。
     """
     market_items = []
     news_items = []
@@ -1677,57 +1786,81 @@ async def generate_daily_report(user_text: str) -> str:
     if FEISHU_REPORT_TABLE_ID:
         report_items = await read_recent_table_records(FEISHU_REPORT_TABLE_ID, limit=5)
 
+    report_items = filter_historical_daily_reports(report_items)
     market_text = format_market_records_for_daily(market_items)
     news_text = format_news_records_for_daily(news_items)
     knowledge_text = format_records_for_daily("最近知识库素材", knowledge_items)
     report_text = format_records_for_daily("最近报告库记录", report_items)
 
     prompt = f"""
-请基于以下飞书多维表格资料，生成一份正式的《投研日报》。
+请基于以下飞书多维表格资料，生成唯一一份正式的《固收投研日报》。
 
 用户指令：
 {user_text}
 
-资料一：市场数据表
+【市场数据：只提供量化事实和价格变化】
 {market_text}
 
-资料二：舆情池
+【舆情池：提供当日事件与舆情线索】
 {news_text}
 
-资料三：知识库素材
+【知识库：提供历史框架、制度背景和研究逻辑】
 {knowledge_text}
 
-资料四：报告库
+【报告库：提供已有研究观点和深度结论】
 {report_text}
 
-请严格按照以下八个板块输出，标题不得改名、合并或省略：
+请严格按照以下九个板块输出，标题不得改名、合并或省略：
 
-一、A股市场
-二、海外市场
-三、汇率
-四、商品
-五、中国宏观
-六、重要舆情
-七、政策与事件
-八、当日关注
+一、今日固收核心结论
+二、今日重点关注
+三、资金面与流动性
+四、利率债市场
+五、信用债市场
+六、可转债与跨资产表现
+七、宏观与政策
+八、重要舆情与机构观点
+九、今日关注与风险提示
 
 写作要求：
-1. 每个有数据的板块统一使用“【数据】”和“【点评】”格式；点评只能依据本板块数据，简短、客观，不预测走势，不给出投资建议。
-2. 某一板块没有有效数据、事实或事件时，该板块只写“暂无新增信息。”，不要生成点评。
-3. “六、重要舆情”仅根据“资料二：舆情池”生成；在“【数据】”下将每条有效舆情单独编号，不得把多条舆情合并成一整段。
-4. 每条舆情至少保留主题、标题、摘要、情绪方向、影响程度、投资含义；资料中某字段为空时不得虚构补充。
-5. 即使只有一条有效舆情，也必须单独编号输出；没有有效舆情时，该板块只写“暂无新增信息。”。
-6. 不得新增输入资料中不存在的新闻、事实、政策或数据。
-7. 语言正式、简洁，适合基金公司或资管机构晨会阅读。
+1. 跨来源合并分析，不按上述四类资料机械复述；相同事件和相同观点只写一次，只输出一份最终日报。
+2. 历史材料只能用于解释，不得覆盖最新市场事实；报告库中的历史日报不得被当作当日新增信息。
+3. 发生冲突时，以日期更新者优先、市场事实优先于观点；明确指出分歧和证据，不得把冲突观点同时写成最终结论。
+4. 每个重要结论尽量回答“发生了什么、为什么重要、对固收市场的影响、后续观察什么”。
+5. 对缺失数据必须明确说明，不得编造或推断。
+6. “今日固收核心结论”先给出偏强、偏弱、震荡或分化等方向判断，再用3—5条说明主要驱动，并明确区分“市场事实”和“研究判断”。
+7. “今日重点关注”列出最重要的政策、数据、会议、资金面或海外事件，并说明可能影响的资产或交易方向；没有可靠信息时写“暂无新增重点事件”。
+8. “资金面与流动性”只使用资金价格、公开市场操作和流动性指标；缺少资金利率数据时写“暂无新增资金面量化数据”，不得用股票、汇率或商品数据代替。
+9. “利率债市场”覆盖国债、政金债、国债期货、收益率曲线和期限利差，并说明为什么重要及对债市的影响；没有相应量化数据时如实说明。
+10. “信用债市场”覆盖城投债、产业债、信用利差、等级利差、供给和风险事件；没有信用数据时可依据其他资料作定性判断，但必须标注“证据不足”。
+11. 股票、汇率和商品数据只用于“可转债与跨资产表现”中解释其对固收资产的影响，不得占据日报主体。
+12. “宏观与政策”中的每条信息都应说明对利率债、信用债或转债的影响方向。
+13. “重要舆情与机构观点”汇总有效观点并去重，不得把历史日报或重复观点重新写成当日新增观点。
+14. “今日关注与风险提示”列出跟踪变量及可能使当前判断失效的风险，只作研究提示，不写确定性收益承诺。
+15. 不得编造输入中不存在的事实、新闻、政策、数据、日期或来源；任何一类资料为空时仍按九个板块生成。
+16. 语言正式、简洁，适合基金公司或资管机构固收晨会阅读。
 """
 
-    return await call_kimi(prompt, "投研日报")
+    try:
+        generated_report = await call_kimi(prompt, "投研日报")
+    except Exception as exc:
+        print("生成固收投研日报失败，返回简版日报:", type(exc).__name__)
+        generated_report = ""
+
+    if daily_report_generation_failed(generated_report):
+        return build_fixed_income_daily_fallback(
+            market_items,
+            news_items,
+            knowledge_items,
+            report_items,
+        )
+    return generated_report
 
 
 async def handle_daily_report(user_text: str) -> str:
     report_text = await generate_daily_report(user_text)
 
-    title = "投研日报-" + datetime.now().strftime("%Y%m%d-%H%M")
+    title = "固收投研日报-" + datetime.now().strftime("%Y%m%d-%H%M")
 
     try:
         doc_url = await create_feishu_doc(title, report_text)
@@ -1736,7 +1869,7 @@ async def handle_daily_report(user_text: str) -> str:
         return (
             report_text
             + f"\n\n【系统提示】已创建飞书文档：\n{doc_url}"
-            + "\n\n【系统提示】本次投研日报已写入报告库，状态：草稿。"
+            + "\n\n【系统提示】本次固收投研日报已写入报告库，状态：草稿。"
         )
     except Exception as e:
         print("生成投研日报归档失败:", repr(e))
@@ -2151,6 +2284,9 @@ async def feishu_events(request: Request):
             "生成投研日报",
             "生成日报",
             "今日投研日报",
+            "固收投研日报",
+            "生成固收日报",
+            "今日固收日报",
         }
 
         if normalized_user_text in daily_report_commands:
