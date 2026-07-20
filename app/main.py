@@ -504,6 +504,7 @@ async def call_kimi(user_text: str, task_type: str) -> str:
 - 历史材料只能用于解释，不能覆盖更新的市场事实，也不得把报告库中的历史日报当作当日新增信息。
 - 信息冲突时，优先采用日期更新者和市场事实；明确指出分歧及证据，不得把冲突观点同时写成最终结论。
 - 对缺失数据必须明确说明，不得编造或推断。
+- 不得输出“XX”“X.X”“X.XX”“XX亿元”“Xbp”“待确认”“人工确认后补充”“示例日期”等占位内容。
 - 缺少资金利率数据时必须写“暂无新增资金面量化数据”，不得用股票、汇率或商品数据代替资金面指标。
 - 缺少国债收益率、资金利率、信用利差等量化数据时必须如实说明，不得补造。
 - 信用数据不足时可以依据舆情、知识库和报告库作定性判断，但必须明确标注“证据不足”。
@@ -1698,63 +1699,207 @@ def filter_historical_daily_reports(items: list) -> list:
     return filtered
 
 
+DAILY_REPORT_PLACEHOLDER_PATTERNS = (
+    r"XX亿元",
+    r"X\.XX",
+    r"X\.X",
+    r"Xbp",
+    r"XX",
+    r"待确认",
+    r"人工确认后补充",
+    r"示例日期",
+)
+
+
+def daily_report_contains_placeholder(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    return any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in DAILY_REPORT_PLACEHOLDER_PATTERNS
+    )
+
+
+def fallback_field_text(value, max_chars: int = 180) -> str:
+    text = re.sub(r"\s+", " ", field_to_text(value)).strip()
+    if not text or daily_report_contains_placeholder(text):
+        return ""
+    return text[:max_chars]
+
+
+def fallback_source_lines(
+    items: list,
+    label: str,
+    title_fields: tuple,
+    detail_fields: tuple,
+    limit: int = 2,
+) -> list:
+    lines = []
+    seen = set()
+    for item in items:
+        fields = item.get("fields", {})
+        if not isinstance(fields, dict):
+            continue
+
+        title = next(
+            (
+                fallback_field_text(fields.get(field_name), max_chars=80)
+                for field_name in title_fields
+                if fallback_field_text(fields.get(field_name), max_chars=80)
+            ),
+            "",
+        )
+        detail = next(
+            (
+                fallback_field_text(fields.get(field_name))
+                for field_name in detail_fields
+                if fallback_field_text(fields.get(field_name))
+            ),
+            "",
+        )
+        content = "；".join(part for part in (title, detail) if part)
+        if not content or content in seen:
+            continue
+        seen.add(content)
+        lines.append(f"- {label}：{content}")
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def fallback_cross_asset_lines(market_items: list, limit: int = 6) -> list:
+    cross_asset_keywords = (
+        "上证指数", "深证成指", "创业板指", "沪深300", "中证500",
+        "恒生指数", "纳斯达克", "标普500", "道琼斯",
+        "美元兑人民币", "美元指数", "汇率",
+        "布伦特原油", "原油", "黄金", "伦敦金", "商品",
+    )
+    lines = []
+    seen = set()
+
+    for item in market_items:
+        fields = item.get("fields", {})
+        if not isinstance(fields, dict):
+            continue
+        name = fallback_field_text(fields.get("指标名称"), max_chars=60)
+        if not name or not any(keyword.casefold() in name.casefold() for keyword in cross_asset_keywords):
+            continue
+
+        value = next(
+            (
+                fallback_field_text(fields.get(field_name), max_chars=60)
+                for field_name in ("数值", "最新值", "收盘价")
+                if fallback_field_text(fields.get(field_name), max_chars=60)
+            ),
+            "",
+        )
+        change = fallback_field_text(fields.get("涨跌幅"), max_chars=60)
+        unit = fallback_field_text(fields.get("单位"), max_chars=20)
+        if not value and not change:
+            continue
+
+        line = f"- {name}"
+        if value:
+            line += f"：{value}{unit}"
+        if change:
+            line += f"；涨跌幅 {change}"
+            if not change.endswith("%"):
+                line += "%"
+        if line in seen:
+            continue
+        seen.add(line)
+        lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def build_fixed_income_daily_fallback(
     market_items: list,
     news_items: list,
     knowledge_items: list,
     report_items: list,
+    report_date: str | None = None,
 ) -> str:
-    """模型不可用时返回唯一一份、不编造事实的结构化简版日报。"""
-    news_status = (
-        "已读取舆情线索，但模型服务暂不可用，无法可靠去重和归纳。"
-        if news_items
-        else "暂无有效舆情记录。"
+    """模型不可用或输出不可信时，使用真实输入生成唯一一份简洁日报。"""
+    report_date = report_date or datetime.now().astimezone().strftime("%Y-%m-%d")
+    source_lines = []
+    source_lines.extend(
+        fallback_source_lines(
+            news_items,
+            "舆情池",
+            ("标题", "主题"),
+            ("摘要", "投资含义"),
+        )
     )
-    research_status = (
-        "已读取历史研究材料，但模型服务暂不可用，未将其作为当日新增观点。"
-        if knowledge_items or report_items
-        else "暂无可用机构观点。"
+    source_lines.extend(
+        fallback_source_lines(
+            knowledge_items,
+            "知识库",
+            ("素材标题",),
+            ("核心结论", "摘要", "投资逻辑"),
+        )
     )
-    market_status = (
-        "已读取市场数据，但模型服务暂不可用，无法形成可靠方向判断。"
-        if market_items
-        else "暂无可用市场量化数据。"
+    source_lines.extend(
+        fallback_source_lines(
+            report_items,
+            "报告库",
+            ("报告标题",),
+            ("核心结论", "投资建议", "风险提示"),
+        )
+    )
+    focus_text = (
+        "\n".join(source_lines)
+        if source_lines
+        else "当前舆情池、知识库和报告库均无可用新增内容。"
+    )
+
+    cross_asset_lines = fallback_cross_asset_lines(market_items)
+    cross_asset_text = (
+        "\n".join(cross_asset_lines)
+        + "\n以上数据仅作为跨资产参考，不替代固收量化指标。"
+        if cross_asset_lines
+        else "当前市场数据表未提供可用于跨资产参考的有效数据。"
+    )
+
+    qualitative_note = (
+        "已保留舆情和研究材料中的真实内容作为定性线索，但缺少固收量化数据，暂不形成量化方向结论。"
+        if source_lines
+        else "当前缺少固收量化数据及可用研究线索，暂不形成方向判断。"
     )
 
     return f"""【固收投研日报（简版）】
+日期：{report_date}
 
 一、今日固收核心结论
-研究判断：模型服务暂不可用，暂不形成偏强、偏弱、震荡或分化的方向结论。
-市场事实：{market_status}
+{qualitative_note}
 
 二、今日重点关注
-暂无新增重点事件。
+{focus_text}
 
 三、资金面与流动性
-暂无新增资金面量化数据。
+当前市场数据表未包含 DR007、R007 等资金利率指标，暂无法进行资金面量化判断。
 
 四、利率债市场
-暂无可核验的国债收益率、政金债、国债期货或期限利差分析；为什么重要及对债市的影响暂无法可靠判断。
+当前未接入国债收益率曲线数据，利率债部分仅依据舆情和研究材料作定性分析。
 
 五、信用债市场
-暂无可核验的信用利差、等级利差、供给或风险事件分析，证据不足。
+当前未接入信用利差数据，信用债部分暂无量化利差判断。
 
 六、可转债与跨资产表现
-暂不根据股票、汇率或商品数据替代固收判断。
+{cross_asset_text}
 
 七、宏观与政策
-暂无经统一分析确认的新增宏观与政策结论。
+宏观与政策影响仅依据上述真实资料作定性观察，不使用缺失数据进行推断。
 
-八、重要舆情与机构观点
-{news_status}
-{research_status}
-
-九、今日关注与风险提示
-关注模型服务恢复及固收量化数据补充。当前判断可能因资金面、政策、海外市场或信用事件变化而失效；本日报仅作研究提示，不构成确定性收益承诺。"""
+八、今日关注与风险提示
+后续重点补充资金利率、国债收益率曲线和信用利差数据；当前定性判断可能随政策、流动性及信用事件变化而调整。"""
 
 
 def daily_report_generation_failed(report_text: str) -> bool:
     if not isinstance(report_text, str) or not report_text.strip():
+        return True
+    if daily_report_contains_placeholder(report_text):
         return True
     return report_text.strip().startswith(
         (
@@ -1791,9 +1936,12 @@ async def generate_daily_report(user_text: str) -> str:
     news_text = format_news_records_for_daily(news_items)
     knowledge_text = format_records_for_daily("最近知识库素材", knowledge_items)
     report_text = format_records_for_daily("最近报告库记录", report_items)
+    report_date = datetime.now().astimezone().strftime("%Y-%m-%d")
 
     prompt = f"""
 请基于以下飞书多维表格资料，生成唯一一份正式的《固收投研日报》。
+
+日报日期：{report_date}
 
 用户指令：
 {user_text}
@@ -1828,17 +1976,19 @@ async def generate_daily_report(user_text: str) -> str:
 3. 发生冲突时，以日期更新者优先、市场事实优先于观点；明确指出分歧和证据，不得把冲突观点同时写成最终结论。
 4. 每个重要结论尽量回答“发生了什么、为什么重要、对固收市场的影响、后续观察什么”。
 5. 对缺失数据必须明确说明，不得编造或推断。
-6. “今日固收核心结论”先给出偏强、偏弱、震荡或分化等方向判断，再用3—5条说明主要驱动，并明确区分“市场事实”和“研究判断”。
-7. “今日重点关注”列出最重要的政策、数据、会议、资金面或海外事件，并说明可能影响的资产或交易方向；没有可靠信息时写“暂无新增重点事件”。
-8. “资金面与流动性”只使用资金价格、公开市场操作和流动性指标；缺少资金利率数据时写“暂无新增资金面量化数据”，不得用股票、汇率或商品数据代替。
-9. “利率债市场”覆盖国债、政金债、国债期货、收益率曲线和期限利差，并说明为什么重要及对债市的影响；没有相应量化数据时如实说明。
-10. “信用债市场”覆盖城投债、产业债、信用利差、等级利差、供给和风险事件；没有信用数据时可依据其他资料作定性判断，但必须标注“证据不足”。
-11. 股票、汇率和商品数据只用于“可转债与跨资产表现”中解释其对固收资产的影响，不得占据日报主体。
-12. “宏观与政策”中的每条信息都应说明对利率债、信用债或转债的影响方向。
-13. “重要舆情与机构观点”汇总有效观点并去重，不得把历史日报或重复观点重新写成当日新增观点。
-14. “今日关注与风险提示”列出跟踪变量及可能使当前判断失效的风险，只作研究提示，不写确定性收益承诺。
-15. 不得编造输入中不存在的事实、新闻、政策、数据、日期或来源；任何一类资料为空时仍按九个板块生成。
-16. 语言正式、简洁，适合基金公司或资管机构固收晨会阅读。
+6. 日报日期只能使用“{report_date}”，不得把历史材料日期或示例日期写成当天日期。
+7. 不得输出“XX”“X.X”“X.XX”“XX亿元”“Xbp”“待确认”“人工确认后补充”“示例日期”等占位内容。
+8. “今日固收核心结论”先给出偏强、偏弱、震荡或分化等方向判断，再用3—5条说明主要驱动，并明确区分“市场事实”和“研究判断”。
+9. “今日重点关注”列出最重要的政策、数据、会议、资金面或海外事件，并说明可能影响的资产或交易方向；没有可靠信息时写“暂无新增重点事件”。
+10. “资金面与流动性”只使用资金价格、公开市场操作和流动性指标；缺少资金利率数据时写“暂无新增资金面量化数据”，不得用股票、汇率或商品数据代替。
+11. “利率债市场”覆盖国债、政金债、国债期货、收益率曲线和期限利差，并说明为什么重要及对债市的影响；没有相应量化数据时如实说明。
+12. “信用债市场”覆盖城投债、产业债、信用利差、等级利差、供给和风险事件；没有信用数据时可依据其他资料作定性判断，但必须标注“证据不足”。
+13. 股票、汇率和商品数据只用于“可转债与跨资产表现”中解释其对固收资产的影响，不得占据日报主体。
+14. “宏观与政策”中的每条信息都应说明对利率债、信用债或转债的影响方向。
+15. “重要舆情与机构观点”汇总有效观点并去重，不得把历史日报或重复观点重新写成当日新增观点。
+16. “今日关注与风险提示”列出跟踪变量及可能使当前判断失效的风险，只作研究提示，不写确定性收益承诺。
+17. 不得编造输入中不存在的事实、新闻、政策、数据、日期或来源；任何一类资料为空时仍按九个板块生成。
+18. 语言正式、简洁，适合基金公司或资管机构固收晨会阅读。
 """
 
     try:
@@ -1853,6 +2003,7 @@ async def generate_daily_report(user_text: str) -> str:
             news_items,
             knowledge_items,
             report_items,
+            report_date,
         )
     return generated_report
 
