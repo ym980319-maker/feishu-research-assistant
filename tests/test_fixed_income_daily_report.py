@@ -102,8 +102,10 @@ class FixedIncomeDailyReportTests(unittest.IsolatedAsyncioTestCase):
 
         prompt, task_type = kimi.await_args.args
         self.assertEqual(task_type, "投研日报")
+        today = main.datetime.now().astimezone().strftime("%Y-%m-%d")
         for required in (
             "固收投研日报",
+            f"日报日期：{today}",
             "今日固收核心结论",
             "资金面与流动性",
             "利率债市场",
@@ -112,6 +114,7 @@ class FixedIncomeDailyReportTests(unittest.IsolatedAsyncioTestCase):
             "为什么重要",
             "对固收市场的影响",
             "对缺失数据必须明确说明，不得编造或推断",
+            "不得输出“XX”“X.X”“X.XX”“XX亿元”“Xbp”",
             "10年期国债收益率",
             "央行开展公开市场操作",
             "货币政策框架",
@@ -183,7 +186,74 @@ class FixedIncomeDailyReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("任何一类资料为空时仍按九个板块生成", kimi.await_args.args[0])
 
     async def test_kimi_failure_returns_one_structured_fallback_without_retry(self) -> None:
+        market = [
+            record(指标名称="上证指数", 数值="3500", 涨跌幅="0.4"),
+            record(指标名称="美元兑人民币", 数值="7.20"),
+            record(指标名称="布伦特原油", 数值="82", 单位="美元/桶"),
+        ]
+        news = [record(标题="央行开展公开市场操作", 摘要="流动性保持合理充裕")]
+        knowledge = [record(素材标题="货币政策框架", 核心结论="关注资金价格变化")]
+        reports = [record(报告标题="城投债专题", 核心结论="区域信用表现分化")]
+
+        async def read_table(table_id: str, limit: int):
+            return {
+                "market-table": market,
+                "knowledge-table": knowledge,
+                "report-table": reports,
+            }[table_id]
+
         kimi = AsyncMock(return_value="Kimi 调用失败：timeout")
+        with patch.object(main, "FEISHU_MARKET_TABLE_ID", "market-table"), patch.object(
+            main, "FEISHU_NEWS_TABLE_ID", "news-table"
+        ), patch.object(
+            main, "FEISHU_KNOWLEDGE_TABLE_ID", "knowledge-table"
+        ), patch.object(
+            main, "FEISHU_REPORT_TABLE_ID", "report-table"
+        ), patch.object(
+            main, "read_recent_table_records", AsyncMock(side_effect=read_table)
+        ), patch.object(
+            main, "read_recent_news_records", AsyncMock(return_value=news)
+        ), patch.object(
+            main, "call_kimi", kimi
+        ):
+            result = await main.generate_daily_report("生成固收日报")
+
+        kimi.assert_awaited_once()
+        self.assertEqual(result.count("【固收投研日报（简版）】"), 1)
+        self.assertEqual(result.count("一、今日固收核心结论"), 1)
+        self.assertEqual(result.count("八、今日关注与风险提示"), 1)
+        self.assertIn(
+            f"日期：{main.datetime.now().astimezone().strftime('%Y-%m-%d')}",
+            result,
+        )
+        self.assertIn("当前市场数据表未包含 DR007、R007 等资金利率指标", result)
+        self.assertIn("当前未接入国债收益率曲线数据", result)
+        self.assertIn("当前未接入信用利差数据", result)
+        self.assertIn("央行开展公开市场操作", result)
+        self.assertIn("货币政策框架", result)
+        self.assertIn("城投债专题", result)
+        self.assertIn("上证指数：3500", result)
+        self.assertIn("美元兑人民币：7.20", result)
+        self.assertIn("布伦特原油：82美元/桶", result)
+        before_cross_asset = result.split("六、可转债与跨资产表现", 1)[0]
+        self.assertNotIn("上证指数", before_cross_asset)
+        self.assertNotIn("美元兑人民币", before_cross_asset)
+        self.assertNotIn("布伦特原油", before_cross_asset)
+        for placeholder in (
+            "XX",
+            "X.X",
+            "X.XX",
+            "XX亿元",
+            "Xbp",
+            "待确认",
+            "人工确认后补充",
+            "示例日期",
+        ):
+            self.assertNotIn(placeholder, result)
+        self.assertNotIn("Kimi 调用失败", result)
+
+    async def test_placeholder_model_output_falls_back_once(self) -> None:
+        kimi = AsyncMock(return_value="资金投放 XX亿元，利差 Xbp，人工确认后补充。")
         with patch.object(main, "FEISHU_MARKET_TABLE_ID", None), patch.object(
             main, "FEISHU_NEWS_TABLE_ID", None
         ), patch.object(
@@ -197,10 +267,28 @@ class FixedIncomeDailyReportTests(unittest.IsolatedAsyncioTestCase):
 
         kimi.assert_awaited_once()
         self.assertEqual(result.count("【固收投研日报（简版）】"), 1)
-        self.assertEqual(result.count("一、今日固收核心结论"), 1)
-        self.assertEqual(result.count("九、今日关注与风险提示"), 1)
-        self.assertIn("暂无新增资金面量化数据", result)
-        self.assertNotIn("Kimi 调用失败", result)
+        self.assertNotIn("XX亿元", result)
+        self.assertNotIn("Xbp", result)
+        self.assertNotIn("人工确认后补充", result)
+
+    async def test_all_sources_empty_returns_concise_missing_data_report(self) -> None:
+        kimi = AsyncMock(return_value="调用 Kimi 失败：service unavailable")
+        with patch.object(main, "FEISHU_MARKET_TABLE_ID", None), patch.object(
+            main, "FEISHU_NEWS_TABLE_ID", None
+        ), patch.object(
+            main, "FEISHU_KNOWLEDGE_TABLE_ID", None
+        ), patch.object(
+            main, "FEISHU_REPORT_TABLE_ID", None
+        ), patch.object(
+            main, "call_kimi", kimi
+        ):
+            result = await main.generate_daily_report("今日固收日报")
+
+        self.assertIn("当前缺少固收量化数据及可用研究线索", result)
+        self.assertIn("当前舆情池、知识库和报告库均无可用新增内容", result)
+        self.assertIn("当前市场数据表未提供可用于跨资产参考的有效数据", result)
+        self.assertLess(len(result), 1000)
+        self.assertFalse(main.daily_report_contains_placeholder(result))
 
     async def test_archive_writes_document_and_report_once(self) -> None:
         document = AsyncMock(return_value="https://example.com/fixed-income-daily")
