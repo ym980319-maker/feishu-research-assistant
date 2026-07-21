@@ -10,6 +10,24 @@ import httpx
 import time
 from pathlib import Path
 
+from app.router.task_router import (
+    DAILY_REPORT,
+    FUND_ANALYSIS,
+    GENERAL_CHAT,
+    REPORT_ANALYSIS,
+    RESEARCH_REPORT,
+    SENTIMENT_ANALYSIS,
+    route_task,
+)
+from app.services.daily_report_service import (
+    handle_daily_report as handle_daily_report_task,
+)
+from app.services.fund_analysis_service import handle_fund_analysis
+from app.services.general_chat_service import handle_general_chat
+from app.services.report_analysis_service import handle_report_analysis
+from app.services.research_report_service import handle_research_report
+from app.services.sentiment_service import handle_sentiment_analysis
+
 load_dotenv()
 
 app = FastAPI(title="Feishu Research Assistant")
@@ -19,6 +37,15 @@ app = FastAPI(title="Feishu Research Assistant")
 # PROCESSED_MESSAGE_IDS：已经完整处理成功的消息
 PROCESSING_MESSAGE_IDS = set()
 PROCESSED_MESSAGE_IDS = set()
+
+TASK_TYPE_LABELS = {
+    SENTIMENT_ANALYSIS: "舆情梳理",
+    REPORT_ANALYSIS: "研报摘要",
+    RESEARCH_REPORT: "深度报告",
+    FUND_ANALYSIS: "基金产品研究",
+    GENERAL_CHAT: "普通问答",
+    DAILY_REPORT: "投研日报",
+}
 
 
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID")
@@ -295,13 +322,7 @@ async def download_feishu_message_file(message_id: str, file_key: str, file_name
 
 
 def detect_task_type(user_text: str) -> str:
-    if any(k in user_text for k in ["舆情", "新闻", "负面", "正面", "事件", "跟踪"]):
-        return "舆情梳理"
-    if any(k in user_text for k in ["深度报告", "报告", "研究", "分析框架"]):
-        return "深度报告"
-    if any(k in user_text for k in ["研报", "摘要", "总结", "提炼", "资料", "材料", "纪要", "核心结论", "投资逻辑"]):
-        return "研报摘要"
-    return "普通问答"
+    return TASK_TYPE_LABELS[route_task(user_text)]
 
 
 def extract_json_from_text(text: str) -> dict:
@@ -2161,7 +2182,12 @@ async def read_subject_news_for_deep_report(subject: dict, limit: int = 5) -> st
     return "\n\n".join(items)
 
 
-async def generate_deep_report(user_text: str, task_type: str) -> str:
+async def generate_deep_report(
+    user_text: str,
+    task_type: str,
+    knowledge_text: str | None = None,
+    public_info_text: str = "",
+) -> str:
     from app.providers.registry import official_research_enabled
 
     official_enabled = official_research_enabled()
@@ -2176,30 +2202,36 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
         except Exception as exc:
             print("提取研究主体失败，继续生成深度报告:", type(exc).__name__)
 
-    knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
+    if knowledge_text is None:
+        knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
 
     if not official_enabled:
-        if knowledge_text:
+        if knowledge_text or public_info_text:
             enhanced_prompt = f"""
 用户原始指令：
 {user_text}
 
+【公开信息补充】
+{public_info_text or '暂无公开信息补充。'}
+
 以下是飞书多维表格“知识库素材”中沉淀的历史研报、资料、纪要和摘要，请优先参考，但不要机械照搬。
 
 【知识库参考资料】
-{knowledge_text}
+{knowledge_text or '暂无相关知识库资料。'}
 
-请基于用户指令和知识库参考资料，生成一篇正式的金融投研深度报告。
+请基于用户指令、公开信息补充和知识库参考资料，生成一篇正式的金融投研深度报告。
 
 要求：
-1. 优先使用知识库中已有事实和逻辑。
-2. 不得编造知识库和用户指令中没有的数据。
+1. 优先使用输入材料中已有事实和逻辑。
+2. 不得编造公开信息、知识库和用户指令中没有的数据。
 3. 对无法确认的信息，必须写“信息不足”或“需人工确认”。
 4. 报告结构应包括：核心结论、行业背景、产业链分析、公司/主体分析、投资逻辑、风险提示、后续跟踪指标。
 5. 语言正式，适合作为投研初稿。
 """
             reply_text = await call_kimi(enhanced_prompt, task_type)
-            return reply_text + "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
+            if knowledge_text:
+                reply_text += "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
+            return reply_text
         return await call_kimi(user_text, task_type)
 
     from app.providers import (
@@ -2293,6 +2325,9 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 
 【知识库参考资料】
 {knowledge_text or '暂无相关知识库资料。'}
+
+【公开信息补充】
+{public_info_text or '暂无公开信息补充。'}
 
 【历史报告参考资料】
 {history_text}
@@ -2426,31 +2461,38 @@ async def feishu_events(request: Request):
             return {"code": 0, "msg": "official research health checked"}
 
         task_id = str(uuid.uuid4())[:8]
-        task_type = detect_task_type(user_text)
+        routed_task = route_task(user_text)
+        task_type = TASK_TYPE_LABELS[routed_task]
 
         await write_task_record(task_id, task_type, user_text, "处理中")
 
-        daily_report_commands = {
-            "投研日报",
-            "生成投研日报",
-            "生成日报",
-            "今日投研日报",
-            "固收投研日报",
-            "生成固收日报",
-            "今日固收日报",
-        }
-
-        if normalized_user_text in daily_report_commands:
-            reply_text = await handle_daily_report(normalized_user_text)
-
-        elif task_type == "深度报告":
-            reply_text = await generate_deep_report(user_text, task_type)
-
-        elif task_type == "研报摘要":
-            reply_text = await call_kimi(user_text, task_type)
-
+        if routed_task == DAILY_REPORT:
+            reply_text = await handle_daily_report_task(
+                normalized_user_text,
+                handle_daily_report,
+            )
+        elif routed_task == RESEARCH_REPORT:
+            reply_text = await handle_research_report(
+                user_text,
+                generate_deep_report,
+                read_knowledge_records,
+            )
+        elif routed_task == REPORT_ANALYSIS:
+            reply_text = await handle_report_analysis(
+                user_text,
+                call_kimi,
+                read_knowledge_records,
+            )
+        elif routed_task == FUND_ANALYSIS:
+            reply_text = await handle_fund_analysis(
+                user_text,
+                call_kimi,
+                read_knowledge_records,
+            )
+        elif routed_task == SENTIMENT_ANALYSIS:
+            reply_text = await handle_sentiment_analysis(user_text, call_deepseek)
         else:
-            reply_text = await call_deepseek(user_text, task_type)
+            reply_text = await handle_general_chat(user_text, call_deepseek)
 
         if task_type == "舆情梳理":
             try:
