@@ -2182,7 +2182,12 @@ async def read_subject_news_for_deep_report(subject: dict, limit: int = 5) -> st
     return "\n\n".join(items)
 
 
-async def generate_deep_report(user_text: str, task_type: str) -> str:
+async def generate_deep_report(
+    user_text: str,
+    task_type: str,
+    knowledge_text: str | None = None,
+    public_info_text: str = "",
+) -> str:
     from app.providers.registry import official_research_enabled
 
     official_enabled = official_research_enabled()
@@ -2197,30 +2202,36 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
         except Exception as exc:
             print("提取研究主体失败，继续生成深度报告:", type(exc).__name__)
 
-    knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
+    if knowledge_text is None:
+        knowledge_text = await read_knowledge_records(limit=10, user_text=user_text)
 
     if not official_enabled:
-        if knowledge_text:
+        if knowledge_text or public_info_text:
             enhanced_prompt = f"""
 用户原始指令：
 {user_text}
 
+【公开信息补充】
+{public_info_text or '暂无公开信息补充。'}
+
 以下是飞书多维表格“知识库素材”中沉淀的历史研报、资料、纪要和摘要，请优先参考，但不要机械照搬。
 
 【知识库参考资料】
-{knowledge_text}
+{knowledge_text or '暂无相关知识库资料。'}
 
-请基于用户指令和知识库参考资料，生成一篇正式的金融投研深度报告。
+请基于用户指令、公开信息补充和知识库参考资料，生成一篇正式的金融投研深度报告。
 
 要求：
-1. 优先使用知识库中已有事实和逻辑。
-2. 不得编造知识库和用户指令中没有的数据。
+1. 优先使用输入材料中已有事实和逻辑。
+2. 不得编造公开信息、知识库和用户指令中没有的数据。
 3. 对无法确认的信息，必须写“信息不足”或“需人工确认”。
 4. 报告结构应包括：核心结论、行业背景、产业链分析、公司/主体分析、投资逻辑、风险提示、后续跟踪指标。
 5. 语言正式，适合作为投研初稿。
 """
             reply_text = await call_kimi(enhanced_prompt, task_type)
-            return reply_text + "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
+            if knowledge_text:
+                reply_text += "\n\n【系统提示】本次深度报告已参考飞书多维表格“知识库素材”中的历史资料。"
+            return reply_text
         return await call_kimi(user_text, task_type)
 
     from app.providers import (
@@ -2314,6 +2325,9 @@ async def generate_deep_report(user_text: str, task_type: str) -> str:
 
 【知识库参考资料】
 {knowledge_text or '暂无相关知识库资料。'}
+
+【公开信息补充】
+{public_info_text or '暂无公开信息补充。'}
 
 【历史报告参考资料】
 {history_text}
@@ -2461,11 +2475,20 @@ async def feishu_events(request: Request):
             reply_text = await handle_research_report(
                 user_text,
                 generate_deep_report,
+                read_knowledge_records,
             )
         elif routed_task == REPORT_ANALYSIS:
-            reply_text = await handle_report_analysis(user_text, call_kimi)
+            reply_text = await handle_report_analysis(
+                user_text,
+                call_kimi,
+                read_knowledge_records,
+            )
         elif routed_task == FUND_ANALYSIS:
-            reply_text = await handle_fund_analysis(user_text, call_kimi)
+            reply_text = await handle_fund_analysis(
+                user_text,
+                call_kimi,
+                read_knowledge_records,
+            )
         elif routed_task == SENTIMENT_ANALYSIS:
             reply_text = await handle_sentiment_analysis(user_text, call_deepseek)
         else:

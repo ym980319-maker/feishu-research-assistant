@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from app.services.web_research_service import (
+    KnowledgeProvider,
+    PublicInfoResearcher,
+    build_research_prompt,
+    collect_research_materials,
+    research_public_info,
+)
+
 
 ModelHandler = Callable[[str, str], Awaitable[str]]
 
@@ -11,6 +19,13 @@ ModelHandler = Callable[[str, str], Awaitable[str]]
 async def handle_report_analysis(
     message: str,
     model_handler: ModelHandler,
+    knowledge_provider: KnowledgeProvider,
+    public_info_researcher: PublicInfoResearcher = research_public_info,
 ) -> str:
-    return await model_handler(message, "研报摘要")
-
+    public_info, knowledge_text = await collect_research_materials(
+        message,
+        knowledge_provider,
+        public_info_researcher,
+    )
+    prompt = build_research_prompt(message, public_info, knowledge_text)
+    return await model_handler(prompt, "研报摘要")
