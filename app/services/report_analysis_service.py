@@ -9,6 +9,7 @@ from app.services.web_research_service import (
     PublicInfoResearcher,
     build_research_prompt,
     collect_research_materials,
+    public_information_requested,
     research_public_info,
 )
 
@@ -26,6 +27,7 @@ async def handle_report_analysis(
         message,
         knowledge_provider,
         public_info_researcher,
+        include_public_info=public_information_requested(message),
     )
     prompt = build_research_prompt(message, public_info, knowledge_text)
     return await model_handler(prompt, "研报摘要")

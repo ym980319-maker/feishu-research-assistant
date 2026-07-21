@@ -5,6 +5,7 @@ from .public_search_provider import (
     MockPublicSearchProvider,
     search_public_information,
 )
+from .tavily_search_provider import TavilySearchProvider
 
 __all__ = [
     "Evidence",
@@ -14,4 +15,5 @@ __all__ = [
     "format_evidence_index",
     "MockPublicSearchProvider",
     "search_public_information",
+    "TavilySearchProvider",
 ]

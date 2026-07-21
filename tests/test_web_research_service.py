@@ -95,7 +95,7 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         async def knowledge_provider(*, limit: int, user_text: str):
             calls.append("knowledge")
             self.assertEqual(limit, 10)
-            self.assertEqual(user_text, "分析这份研报")
+            self.assertEqual(user_text, "分析这份研报并补充最新公开信息")
             return "知识库中的历史研究框架"
 
         async def kimi(prompt: str, task_type: str):
@@ -106,7 +106,7 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
             return "研报分析结果"
 
         result = await handle_report_analysis(
-            "分析这份研报",
+            "分析这份研报并补充最新公开信息",
             kimi,
             knowledge_provider,
             public_researcher,

@@ -7,6 +7,7 @@ services or model configuration.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -34,7 +35,20 @@ class MockPublicSearchProvider:
         return self._results.get(query, {})
 
 
-DEFAULT_PUBLIC_SEARCH_PROVIDER: PublicSearchProvider = MockPublicSearchProvider()
+DEFAULT_PUBLIC_SEARCH_PROVIDER: PublicSearchProvider | None = None
+
+
+def get_configured_public_search_provider() -> PublicSearchProvider:
+    """Resolve the provider lazily so ``load_dotenv`` has already run."""
+    if DEFAULT_PUBLIC_SEARCH_PROVIDER is not None:
+        return DEFAULT_PUBLIC_SEARCH_PROVIDER
+
+    api_key = str(os.getenv("TAVILY_API_KEY") or "").strip()
+    if api_key:
+        from app.providers.tavily_search_provider import TavilySearchProvider
+
+        return TavilySearchProvider(api_key=api_key)
+    return MockPublicSearchProvider()
 
 
 def empty_public_search_result() -> dict[str, str]:
@@ -67,13 +81,12 @@ async def search_public_information(
     query: str,
     provider: PublicSearchProvider | None = None,
 ) -> dict[str, str]:
-    """Search public information through the current mock provider."""
+    """Search through an injected provider or the environment configuration."""
     normalized_query = str(query or "").strip()
-    selected_provider = provider or DEFAULT_PUBLIC_SEARCH_PROVIDER
+    selected_provider = provider or get_configured_public_search_provider()
     try:
         value = await selected_provider.search(normalized_query)
     except Exception as exc:
         print("公开信息搜索 Provider 调用失败，返回空结果:", type(exc).__name__)
         value = None
     return normalize_public_search_result(value)
-

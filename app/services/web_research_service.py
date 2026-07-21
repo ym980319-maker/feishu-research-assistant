@@ -14,6 +14,21 @@ from app.providers.public_search_provider import (
 
 
 PUBLIC_INFO_FIELDS = ("announcements", "news", "regulatory_info")
+PUBLIC_INFO_REQUEST_MARKERS = (
+    "公开信息",
+    "外部信息",
+    "最新",
+    "近期",
+    "公告",
+    "新闻",
+    "监管",
+    "政策",
+    "动态",
+    "进展",
+    "核实",
+    "验证",
+    "补充",
+)
 
 
 class PublicInfoProvider(Protocol):
@@ -56,6 +71,11 @@ def empty_public_info(subject: str) -> dict[str, Any]:
         "news": [],
         "regulatory_info": [],
     }
+
+
+def public_information_requested(message: str) -> bool:
+    normalized = str(message or "").strip()
+    return any(marker in normalized for marker in PUBLIC_INFO_REQUEST_MARKERS)
 
 
 def normalize_public_info(
@@ -125,9 +145,14 @@ async def collect_research_materials(
     subject: str,
     knowledge_provider: KnowledgeProvider,
     public_info_researcher: PublicInfoResearcher = research_public_info,
+    *,
+    include_public_info: bool = True,
 ) -> tuple[dict[str, Any], str]:
-    """Collect mock public information, then relevant knowledge-base text."""
-    public_info = await public_info_researcher(subject)
+    """Collect enabled public information, then relevant knowledge-base text."""
+    if include_public_info:
+        public_info = await public_info_researcher(subject)
+    else:
+        public_info = empty_public_info(subject)
     try:
         knowledge_text = await knowledge_provider(limit=10, user_text=subject)
     except Exception as exc:

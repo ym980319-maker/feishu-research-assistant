@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -24,7 +25,12 @@ class _FailingSearchProvider:
 
 class PublicSearchProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_mock_returns_exact_empty_schema(self) -> None:
-        result = await search_public_information("城投债")
+        with patch.object(
+            public_search_provider,
+            "DEFAULT_PUBLIC_SEARCH_PROVIDER",
+            None,
+        ), patch.dict(os.environ, {"TAVILY_API_KEY": ""}):
+            result = await search_public_information("城投债")
 
         self.assertEqual(
             result,
@@ -159,4 +165,3 @@ class PublicSearchProviderTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
