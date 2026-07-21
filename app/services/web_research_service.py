@@ -6,6 +6,12 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
+from app.providers.public_search_provider import (
+    has_traceable_source,
+    normalize_public_search_result,
+    search_public_information,
+)
+
 
 PUBLIC_INFO_FIELDS = ("announcements", "news", "regulatory_info")
 
@@ -26,7 +32,21 @@ class MockPublicInfoProvider:
         return self._results.get(subject, {})
 
 
-DEFAULT_PUBLIC_INFO_PROVIDER: PublicInfoProvider = MockPublicInfoProvider()
+class PublicSearchInfoProvider:
+    """Adapt the unified public-search provider to PR18's grouped contract."""
+
+    async def research(self, subject: str) -> Mapping[str, Any]:
+        result = await search_public_information(subject)
+        news = [result] if has_traceable_source(result) else []
+        return {
+            "subject": subject,
+            "announcements": [],
+            "news": news,
+            "regulatory_info": [],
+        }
+
+
+DEFAULT_PUBLIC_INFO_PROVIDER: PublicInfoProvider = PublicSearchInfoProvider()
 
 
 def empty_public_info(subject: str) -> dict[str, Any]:
@@ -52,7 +72,11 @@ def normalize_public_info(
     for field in PUBLIC_INFO_FIELDS:
         items = value.get(field)
         if isinstance(items, (list, tuple)):
-            result[field] = list(items)
+            result[field] = [
+                normalize_public_search_result(item)
+                for item in items
+                if isinstance(item, Mapping) and has_traceable_source(item)
+            ]
     return result
 
 
@@ -74,7 +98,10 @@ async def research_public_info(
 def format_public_info(public_info: Mapping[str, Any]) -> str:
     """Format provider output as a bounded, explicit prompt section."""
     subject = str(public_info.get("subject") or "").strip()
-    parts = [f"研究主体：{subject or '未识别'}"]
+    parts = [
+        f"研究主体：{subject or '未识别'}",
+        "来源约束：外部信息必须同时标注来源和发布时间；无来源或无时间的信息不得作为事实输出。",
+    ]
     labels = {
         "announcements": "公告",
         "news": "新闻",
@@ -125,6 +152,5 @@ def build_research_prompt(
 【知识库材料】
 {knowledge_text or '暂无相关知识库材料。'}
 
-请仅依据用户输入和以上材料进行分析。公开信息为空时不得自行补充或编造。
+请仅依据用户输入和以上材料进行分析。公开信息为空时不得自行补充或编造；引用外部信息时必须保留来源和发布时间，无来源的信息不得作为事实输出。
 """.strip()
-

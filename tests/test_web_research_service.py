@@ -34,9 +34,27 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         provider = MockPublicInfoProvider(
             {
                 "某基金": {
-                    "announcements": [{"title": "基金经理变更公告"}],
-                    "news": [{"title": "产品规模变化"}],
-                    "regulatory_info": [{"title": "监管规则"}],
+                    "announcements": [
+                        {
+                            "title": "基金经理变更公告",
+                            "source": "基金管理人",
+                            "publish_time": "2026-07-21",
+                        }
+                    ],
+                    "news": [
+                        {
+                            "title": "产品规模变化",
+                            "source": "公开新闻",
+                            "publish_time": "2026-07-21",
+                        }
+                    ],
+                    "regulatory_info": [
+                        {
+                            "title": "监管规则",
+                            "source": "监管机构",
+                            "publish_time": "2026-07-21",
+                        }
+                    ],
                 }
             }
         )
@@ -63,7 +81,13 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
             calls.append("public")
             return {
                 "subject": subject,
-                "announcements": [{"title": "公司公告"}],
+                "announcements": [
+                    {
+                        "title": "公司公告",
+                        "source": "上市公司",
+                        "publish_time": "2026-07-21",
+                    }
+                ],
                 "news": [],
                 "regulatory_info": [],
             }
@@ -99,7 +123,13 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
             return {
                 "subject": subject,
                 "announcements": [],
-                "news": [{"title": "基金产品公开信息"}],
+                "news": [
+                    {
+                        "title": "基金产品公开信息",
+                        "source": "基金管理人",
+                        "publish_time": "2026-07-21",
+                    }
+                ],
                 "regulatory_info": [],
             }
 
@@ -133,7 +163,13 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
                 "subject": subject,
                 "announcements": [],
                 "news": [],
-                "regulatory_info": [{"title": "监管公开信息"}],
+                "regulatory_info": [
+                    {
+                        "title": "监管公开信息",
+                        "source": "监管机构",
+                        "publish_time": "2026-07-21",
+                    }
+                ],
             }
 
         async def knowledge_provider(*, limit: int, user_text: str):
@@ -166,4 +202,3 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
