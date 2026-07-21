@@ -220,9 +220,12 @@ class OfficialResearchHealthTests(unittest.IsolatedAsyncioTestCase):
                 daily = AsyncMock(return_value="日报")
                 deep = AsyncMock(return_value="深度报告")
                 deepseek = AsyncMock(return_value="舆情")
+                kimi = AsyncMock(return_value="舆情")
                 with patch.object(main, "handle_daily_report", daily), patch.object(
                     main, "generate_deep_report", deep
                 ), patch.object(main, "call_deepseek", deepseek), patch.object(
+                    main, "call_kimi", kimi
+                ), patch.object(
                     main, "write_news_record", AsyncMock()
                 ), patch.object(main, "write_report_record", AsyncMock()), patch.object(
                     main, "create_feishu_doc", AsyncMock(return_value="https://example.com/doc")
@@ -239,7 +242,8 @@ class OfficialResearchHealthTests(unittest.IsolatedAsyncioTestCase):
                 elif expected == "deep":
                     deep.assert_awaited_once()
                 else:
-                    deepseek.assert_awaited_once()
+                    kimi.assert_awaited_once()
+                    deepseek.assert_not_awaited()
 
 
 if __name__ == "__main__":

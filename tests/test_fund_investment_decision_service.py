@@ -135,13 +135,15 @@ class FundInvestmentDecisionServiceTests(unittest.IsolatedAsyncioTestCase):
         prompt, task_type = model.await_args.args
         self.assertEqual(task_type, "基金产品研究")
         for section in (
-            "一、产品概况",
-            "二、投资策略分析",
-            "三、基金经理与管理人分析",
-            "四、历史业绩分析",
-            "五、风险分析",
-            "六、公开信息补充",
-            "七、投资建议",
+            "《基金投资决策报告》",
+            "一、产品基本信息",
+            "二、管理人分析",
+            "三、基金经理分析",
+            "四、投资策略分析",
+            "五、历史业绩分析",
+            "六、风险分析",
+            "七、市场环境分析",
+            "八、投资建议",
         ):
             self.assertIn(section, prompt)
         for required in (
@@ -175,6 +177,7 @@ class FundInvestmentDecisionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(researcher.await_count, 4)
         prompt = model.await_args.args[0]
         self.assertIn("未检索到公开资料", prompt)
+        self.assertIn("公开资料未找到", prompt)
         self.assertIn("未提供基金合同、募集说明书或定期报告", prompt)
         self.assertIn("暂无相关知识库材料", prompt)
 

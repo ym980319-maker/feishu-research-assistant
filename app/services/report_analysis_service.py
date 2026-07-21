@@ -23,12 +23,16 @@ async def handle_report_analysis(
     model_handler: ModelHandler,
     knowledge_provider: KnowledgeProvider,
     public_info_researcher: EvidenceResearcher | None = None,
+    *,
+    include_public_info: bool | None = None,
 ) -> str:
+    if include_public_info is None:
+        include_public_info = public_information_requested(message)
     evidence_pool, knowledge_text = await collect_evidence_materials(
         message,
         knowledge_provider,
         public_info_researcher,
-        include_public_info=public_information_requested(message),
+        include_public_info=include_public_info,
     )
     prompt = build_evidence_research_prompt(
         message,

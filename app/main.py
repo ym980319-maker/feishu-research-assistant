@@ -19,14 +19,7 @@ from app.router.task_router import (
     SENTIMENT_ANALYSIS,
     route_task,
 )
-from app.services.daily_report_service import (
-    handle_daily_report as handle_daily_report_task,
-)
-from app.services.fund_analysis_service import handle_fund_analysis
-from app.services.general_chat_service import handle_general_chat
-from app.services.report_analysis_service import handle_report_analysis
-from app.services.research_report_service import handle_research_report
-from app.services.sentiment_service import handle_sentiment_analysis
+from app.services.research_assistant_service import handle_research_assistant
 
 load_dotenv()
 
@@ -2466,33 +2459,16 @@ async def feishu_events(request: Request):
 
         await write_task_record(task_id, task_type, user_text, "处理中")
 
-        if routed_task == DAILY_REPORT:
-            reply_text = await handle_daily_report_task(
-                normalized_user_text,
-                handle_daily_report,
-            )
-        elif routed_task == RESEARCH_REPORT:
-            reply_text = await handle_research_report(
-                user_text,
-                generate_deep_report,
-                read_knowledge_records,
-            )
-        elif routed_task == REPORT_ANALYSIS:
-            reply_text = await handle_report_analysis(
-                user_text,
-                call_kimi,
-                read_knowledge_records,
-            )
-        elif routed_task == FUND_ANALYSIS:
-            reply_text = await handle_fund_analysis(
-                user_text,
-                call_kimi,
-                read_knowledge_records,
-            )
-        elif routed_task == SENTIMENT_ANALYSIS:
-            reply_text = await handle_sentiment_analysis(user_text, call_deepseek)
-        else:
-            reply_text = await handle_general_chat(user_text, call_deepseek)
+        assistant_result = await handle_research_assistant(
+            normalized_user_text,
+            kimi_handler=call_kimi,
+            deepseek_handler=call_deepseek,
+            knowledge_provider=read_knowledge_records,
+            deep_report_handler=generate_deep_report,
+            legacy_daily_handler=handle_daily_report,
+            routed_task=routed_task,
+        )
+        reply_text = assistant_result.content
 
         if task_type == "舆情梳理":
             try:

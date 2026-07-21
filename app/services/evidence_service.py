@@ -124,7 +124,8 @@ def format_evidence_pool(evidence_pool: Sequence[Evidence]) -> str:
                 [
                     f"\n【证据 {index}】",
                     f"标题：{evidence.title or '未提供标题'}",
-                    f"内容：{evidence.content or '未提供内容'}",
+                    "证据内容（evidence_content）："
+                    + (evidence.evidence_content or "未提供内容"),
                     f"来源：{evidence.source}",
                     "发布时间："
                     + (evidence.published_time or "未提供（低优先级）"),
@@ -160,4 +161,3 @@ def build_evidence_research_prompt(
 
 请严格依据用户输入、Evidence Pool 和知识库材料完成研究分析；信息不足时明确说明，不得自行补全事实或数字。
 """.strip()
-
