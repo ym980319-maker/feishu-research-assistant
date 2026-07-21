@@ -1,8 +1,6 @@
-from fastapi import FastAPI, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
 from datetime import datetime
-import os
 import json
 import re
 import uuid
@@ -10,6 +8,8 @@ import httpx
 import time
 from pathlib import Path
 
+from app.bootstrap import create_app, initialize_services
+from app.config import load_config
 from app.router.task_router import (
     DAILY_REPORT,
     FUND_ANALYSIS,
@@ -19,11 +19,9 @@ from app.router.task_router import (
     SENTIMENT_ANALYSIS,
     route_task,
 )
-from app.services.research_assistant_service import handle_research_assistant
-
-load_dotenv()
-
-app = FastAPI(title="Feishu Research Assistant")
+APP_CONFIG = load_config()
+APP_SERVICES = initialize_services(APP_CONFIG)
+FEISHU_ADAPTER = APP_SERVICES.feishu_adapter
 
 # 去重：避免飞书重试导致同一条消息被处理多次
 # PROCESSING_MESSAGE_IDS：正在处理中的消息
@@ -41,28 +39,24 @@ TASK_TYPE_LABELS = {
 }
 
 
-FEISHU_APP_ID = os.getenv("FEISHU_APP_ID")
-FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET")
+FEISHU_APP_ID = APP_CONFIG.feishu.app_id
+FEISHU_APP_SECRET = APP_CONFIG.feishu.app_secret
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_API_KEY = APP_CONFIG.deepseek.api_key
+DEEPSEEK_BASE_URL = APP_CONFIG.deepseek.base_url
 
-KIMI_API_KEY = os.getenv("KIMI_API_KEY")
-KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/v1")
-KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-k2.6")
+KIMI_API_KEY = APP_CONFIG.kimi.api_key
+KIMI_BASE_URL = APP_CONFIG.kimi.base_url
+KIMI_MODEL = APP_CONFIG.kimi.model
 
-FEISHU_BITABLE_APP_TOKEN = os.getenv("FEISHU_BITABLE_APP_TOKEN")
-FEISHU_NEWS_TABLE_ID = os.getenv("FEISHU_NEWS_TABLE_ID")
-FEISHU_TASK_TABLE_ID = os.getenv("FEISHU_TASK_TABLE_ID")
-FEISHU_REPORT_TABLE_ID = os.getenv("FEISHU_REPORT_TABLE_ID")
-FEISHU_KNOWLEDGE_TABLE_ID = os.getenv("FEISHU_KNOWLEDGE_TABLE_ID")
-FEISHU_MARKET_TABLE_ID = os.getenv("FEISHU_MARKET_TABLE_ID")
-FEISHU_DOC_FOLDER_TOKEN = os.getenv("FEISHU_DOC_FOLDER_TOKEN")
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "feishu-research-assistant"}
+FEISHU_BITABLE_APP_TOKEN = APP_CONFIG.feishu.bitable_app_token
+FEISHU_NEWS_TABLE_ID = APP_CONFIG.feishu.news_table_id
+FEISHU_TASK_TABLE_ID = APP_CONFIG.feishu.task_table_id
+FEISHU_REPORT_TABLE_ID = APP_CONFIG.feishu.report_table_id
+FEISHU_KNOWLEDGE_TABLE_ID = APP_CONFIG.feishu.knowledge_table_id
+FEISHU_MARKET_TABLE_ID = APP_CONFIG.feishu.market_table_id
+FEISHU_DOC_FOLDER_TOKEN = APP_CONFIG.feishu.doc_folder_token
+FEISHU_TENANT_DOMAIN = APP_CONFIG.feishu.tenant_domain
 
 
 async def check_bitable_read_status(table_id: str | None) -> str:
@@ -805,7 +799,7 @@ async def create_feishu_doc(title: str, content: str) -> str:
             raise RuntimeError(f"写入飞书文档失败: {add_data}")
 
     if not document_url:
-        document_url = f"https://{os.getenv('FEISHU_TENANT_DOMAIN', 'qcn787gcsi1s.feishu.cn')}/docx/{document_id}"
+        document_url = f"https://{FEISHU_TENANT_DOMAIN}/docx/{document_id}"
 
     return document_url
 
@@ -2347,7 +2341,6 @@ async def generate_deep_report(
     return reply_text
 
 
-@app.post("/feishu/events")
 async def feishu_events(request: Request):
     body = await request.json()
 
@@ -2359,10 +2352,13 @@ async def feishu_events(request: Request):
     message_id = None
 
     try:
-        event = body.get("event", {})
-        message = event.get("message", {})
-        message_id = message.get("message_id")
-        message_type = message.get("message_type")
+        research_task = FEISHU_ADAPTER.to_research_task(
+            body,
+            clean_feishu_mention,
+        )
+        message = research_task.raw_message
+        message_id = research_task.message_id
+        message_type = research_task.message_type
 
         # 先识别文件消息：第一阶段只打印 file_key，方便后续下载
         if message_id and message_type in ["file", "media"]:
@@ -2436,9 +2432,7 @@ async def feishu_events(request: Request):
 
         PROCESSING_MESSAGE_IDS.add(message_id)
 
-        content_raw = message.get("content", "{}")
-        content = json.loads(content_raw)
-        user_text = clean_feishu_mention(content.get("text", ""))
+        user_text = research_task.user_text
 
         if not user_text:
             reply_text = "我收到了，但没有识别到具体问题。你可以说：帮我梳理今天机器人产业链舆情。"
@@ -2459,8 +2453,8 @@ async def feishu_events(request: Request):
 
         await write_task_record(task_id, task_type, user_text, "处理中")
 
-        assistant_result = await handle_research_assistant(
-            normalized_user_text,
+        assistant_result = await FEISHU_ADAPTER.dispatch(
+            research_task,
             kimi_handler=call_kimi,
             deepseek_handler=call_deepseek,
             knowledge_provider=read_knowledge_records,
@@ -2514,3 +2508,11 @@ async def feishu_events(request: Request):
             PROCESSING_MESSAGE_IDS.discard(message_id)
 
     return {"code": 0, "msg": "ok"}
+
+
+# Compatibility ASGI entry. Deployment-specific assembly lives in bootstrap.
+app = create_app(
+    config=APP_CONFIG,
+    services=APP_SERVICES,
+    feishu_event_handler=feishu_events,
+)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import os
 import socket
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -11,6 +10,8 @@ from typing import Any, Iterable
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+
+from app.config import environment_bool, environment_float, environment_int
 
 from .models import Evidence
 
@@ -24,37 +25,27 @@ DEFAULT_MAX_REDIRECTS = 3
 
 
 def env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
+    return environment_bool(name, default)
 
 
 def env_int(name: str, default: int, minimum: int = 0, maximum: int | None = None) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-    if value < minimum or (maximum is not None and value > maximum):
-        return default
-    return value
+    return environment_int(
+        name,
+        default,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 def env_float(
     name: str, default: float, minimum: float = 0.1, maximum: float | None = None
 ) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-    if value < minimum or (maximum is not None and value > maximum):
-        return default
-    return value
+    return environment_float(
+        name,
+        default,
+        minimum=minimum,
+        maximum=maximum,
+    )
 
 
 def httpx_timeout() -> httpx.Timeout:

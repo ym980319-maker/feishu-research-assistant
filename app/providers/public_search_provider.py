@@ -7,9 +7,10 @@ services or model configuration.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from typing import Any, Protocol
+
+from app.config import load_config
 
 
 PUBLIC_SEARCH_FIELDS = (
@@ -43,11 +44,15 @@ def get_configured_public_search_provider() -> PublicSearchProvider:
     if DEFAULT_PUBLIC_SEARCH_PROVIDER is not None:
         return DEFAULT_PUBLIC_SEARCH_PROVIDER
 
-    api_key = str(os.getenv("TAVILY_API_KEY") or "").strip()
-    if api_key:
+    config = load_config(load_dotenv_file=False).tavily
+    if config.api_key:
         from app.providers.tavily_search_provider import TavilySearchProvider
 
-        return TavilySearchProvider(api_key=api_key)
+        return TavilySearchProvider(
+            api_key=config.api_key,
+            endpoint=config.endpoint,
+            timeout=config.timeout_seconds,
+        )
     return MockPublicSearchProvider()
 
 
