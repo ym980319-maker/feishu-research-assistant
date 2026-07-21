@@ -13,3 +13,7 @@ class Evidence:
     published_time: str = ""
     url: str = ""
 
+    @property
+    def evidence_content(self) -> str:
+        """Stable prompt-facing alias retained by the research workflow."""
+        return self.content

@@ -7,8 +7,11 @@ import re
 
 SENTIMENT_ANALYSIS = "sentiment_analysis"
 REPORT_ANALYSIS = "report_analysis"
-RESEARCH_REPORT = "research_report"
-FUND_ANALYSIS = "fund_analysis"
+DEEP_RESEARCH = "deep_research"
+FUND_INVESTMENT_DECISION = "fund_investment_decision"
+# Backward-compatible names used by existing imports and tests.
+RESEARCH_REPORT = DEEP_RESEARCH
+FUND_ANALYSIS = FUND_INVESTMENT_DECISION
 GENERAL_CHAT = "general_chat"
 DAILY_REPORT = "daily_report"
 
@@ -97,4 +100,3 @@ def route_task(user_text: str) -> str:
         return SENTIMENT_ANALYSIS
 
     return GENERAL_CHAT
-
