@@ -151,7 +151,10 @@ class WebResearchServiceTests(unittest.IsolatedAsyncioTestCase):
             public_researcher,
         )
 
-        self.assertEqual(calls, ["public", "knowledge", "kimi"])
+        self.assertEqual(
+            calls,
+            ["public", "public", "public", "public", "knowledge", "kimi"],
+        )
         self.assertEqual(result, "基金分析结果")
 
     async def test_research_report_passes_collected_context_to_generator(self) -> None:

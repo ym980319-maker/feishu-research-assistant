@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from app.services.evidence_service import (
+    EvidenceResearcher,
+    build_evidence_research_prompt,
+    collect_evidence_materials,
+)
 from app.services.web_research_service import (
     KnowledgeProvider,
-    PublicInfoResearcher,
-    build_research_prompt,
-    collect_research_materials,
     public_information_requested,
-    research_public_info,
 )
 
 
@@ -21,13 +22,17 @@ async def handle_report_analysis(
     message: str,
     model_handler: ModelHandler,
     knowledge_provider: KnowledgeProvider,
-    public_info_researcher: PublicInfoResearcher = research_public_info,
+    public_info_researcher: EvidenceResearcher | None = None,
 ) -> str:
-    public_info, knowledge_text = await collect_research_materials(
+    evidence_pool, knowledge_text = await collect_evidence_materials(
         message,
         knowledge_provider,
         public_info_researcher,
         include_public_info=public_information_requested(message),
     )
-    prompt = build_research_prompt(message, public_info, knowledge_text)
+    prompt = build_evidence_research_prompt(
+        message,
+        evidence_pool,
+        knowledge_text,
+    )
     return await model_handler(prompt, "研报摘要")

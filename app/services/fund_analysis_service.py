@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from app.services.web_research_service import (
+from app.services.evidence_service import (
+    EvidenceResearcher,
     KnowledgeProvider,
-    PublicInfoResearcher,
-    build_research_prompt,
-    collect_research_materials,
-    research_public_info,
+)
+from app.services.fund_investment_decision_service import (
+    FundDocumentInput,
+    generate_fund_investment_decision,
 )
 
 
@@ -20,12 +21,13 @@ async def handle_fund_analysis(
     message: str,
     model_handler: ModelHandler,
     knowledge_provider: KnowledgeProvider,
-    public_info_researcher: PublicInfoResearcher = research_public_info,
+    public_info_researcher: EvidenceResearcher | None = None,
+    documents: FundDocumentInput = None,
 ) -> str:
-    public_info, knowledge_text = await collect_research_materials(
+    return await generate_fund_investment_decision(
         message,
+        model_handler,
         knowledge_provider,
-        public_info_researcher,
+        documents=documents,
+        evidence_researcher=public_info_researcher,
     )
-    prompt = build_research_prompt(message, public_info, knowledge_text)
-    return await model_handler(prompt, "基金产品研究")
