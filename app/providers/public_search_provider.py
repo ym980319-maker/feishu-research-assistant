@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from app.config import load_config
+from app.config import TavilyConfig, load_config
 
 
 PUBLIC_SEARCH_FIELDS = (
@@ -39,19 +39,21 @@ class MockPublicSearchProvider:
 DEFAULT_PUBLIC_SEARCH_PROVIDER: PublicSearchProvider | None = None
 
 
-def get_configured_public_search_provider() -> PublicSearchProvider:
+def get_configured_public_search_provider(
+    config: TavilyConfig | None = None,
+) -> PublicSearchProvider:
     """Resolve the provider lazily so ``load_dotenv`` has already run."""
     if DEFAULT_PUBLIC_SEARCH_PROVIDER is not None:
         return DEFAULT_PUBLIC_SEARCH_PROVIDER
 
-    config = load_config(load_dotenv_file=False).tavily
-    if config.api_key:
+    selected_config = config or load_config(load_dotenv_file=False).tavily
+    if selected_config.api_key:
         from app.providers.tavily_search_provider import TavilySearchProvider
 
         return TavilySearchProvider(
-            api_key=config.api_key,
-            endpoint=config.endpoint,
-            timeout=config.timeout_seconds,
+            api_key=selected_config.api_key,
+            endpoint=selected_config.endpoint,
+            timeout=selected_config.timeout_seconds,
         )
     return MockPublicSearchProvider()
 
