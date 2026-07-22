@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
+import json
+import re
 
 from app.models.evidence import Evidence
+from app.providers.fund_data_provider import (
+    FUND_DATA_SOURCE,
+    FundDataProvider,
+)
 from app.services.evidence_service import (
     EvidenceResearcher,
     KnowledgeProvider,
@@ -15,6 +21,7 @@ from app.services.evidence_service import (
 
 ModelHandler = Callable[[str, str], Awaitable[str]]
 FundDocumentInput = str | Sequence[str] | None
+FUND_CODE_IN_TEXT = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
 FUND_PUBLIC_SEARCH_TOPICS = (
     "基金经理公开信息",
@@ -75,6 +82,38 @@ def format_fund_documents(documents: FundDocumentInput) -> str:
     return "\n\n".join(parts) or "未提供基金合同、募集说明书或定期报告。"
 
 
+def extract_fund_code(message: str) -> str:
+    match = FUND_CODE_IN_TEXT.search(str(message or ""))
+    return match.group(1) if match else ""
+
+
+async def collect_fund_data(
+    message: str,
+    provider: FundDataProvider | None = None,
+) -> tuple[str, dict[str, object] | None]:
+    """Read real fund data only when a six-digit code is present."""
+    fund_code = extract_fund_code(message)
+    if not fund_code:
+        return "", None
+    selected_provider = provider or FundDataProvider()
+    try:
+        return fund_code, await selected_provider.get_fund_data(fund_code)
+    except Exception as exc:
+        print("基金数据 Provider 调用失败，使用缺数说明继续:", type(exc).__name__)
+        return fund_code, None
+
+
+def format_fund_data_for_prompt(
+    fund_code: str,
+    fund_data: dict[str, object] | None,
+) -> str:
+    if not fund_code:
+        return "未提供有效的6位基金代码，未调用基金数据 Provider。"
+    if not fund_data:
+        return f"基金代码 {fund_code} 的公开基金数据暂不可用。"
+    return json.dumps(fund_data, ensure_ascii=False, indent=2)
+
+
 async def generate_fund_investment_decision(
     fund_name: str,
     model_handler: ModelHandler,
@@ -82,8 +121,13 @@ async def generate_fund_investment_decision(
     *,
     documents: FundDocumentInput = None,
     evidence_researcher: EvidenceResearcher | None = None,
+    fund_data_provider: FundDataProvider | None = None,
 ) -> str:
     """Collect Evidence and invoke Kimi once for the final decision report."""
+    fund_code, fund_data = await collect_fund_data(
+        fund_name,
+        fund_data_provider,
+    )
     evidence_pool = await collect_fund_evidence(
         fund_name,
         evidence_researcher,
@@ -105,6 +149,10 @@ async def generate_fund_investment_decision(
 
 【基金合同、募集说明书或定期报告】
 {format_fund_documents(documents)}
+
+【基金数据 Provider】
+数据来源：{FUND_DATA_SOURCE}
+{format_fund_data_for_prompt(fund_code, fund_data)}
 
 {format_evidence_pool(evidence_pool)}
 
@@ -132,6 +180,7 @@ async def generate_fund_investment_decision(
 4. 未检索到公开资料时，必须明确说明“公开资料未找到”，不得依据常识补写基金经理、管理人、监管或舆情事实。
 5. 禁止输出虚假数据或占位符，包括 XX%、X亿元、Xbp、XX公司。
 6. 投资建议必须区分事实、研究判断和待核实事项，不得承诺确定性收益。
+7. 基金规模、净值、历史收益和持仓数据只能引用基金数据 Provider 或用户材料中的明确数据，并保留对应日期；Provider 未返回的字段必须说明缺失。
 """.strip()
 
     return await model_handler(prompt, "基金产品研究")
