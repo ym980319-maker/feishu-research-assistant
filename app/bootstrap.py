@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from app.adapters.feishu_adapter import FeishuAdapter, register_feishu_routes
@@ -26,6 +27,7 @@ EventHandler = Callable[[Any], Awaitable[Any]]
 HealthHandler = Callable[[], Awaitable[Any]]
 ApplicationFactory = Callable[..., Any]
 ResearchAssistantHandler = Callable[..., Awaitable[Any]]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +46,20 @@ def initialize_services(
 ) -> ApplicationServices:
     """Load configuration and initialize deployment-facing service objects."""
     selected_config = config or load_config()
+    logger.info(
+        "开始初始化应用组件，运行环境=%s",
+        selected_config.server.environment,
+    )
     research_assistant = handle_research_assistant
     try:
         public_search_provider = get_configured_public_search_provider(
             selected_config.tavily
         )
     except Exception as exc:
+        logger.error(
+            "Public Search Provider 初始化失败，异常类型=%s",
+            type(exc).__name__,
+        )
         raise StartupError(
             "应用启动失败：Public Search Provider 初始化失败（"
             f"{type(exc).__name__}）"
@@ -63,6 +73,11 @@ def initialize_services(
     )
     if strict_startup:
         assert_startup_ready(startup_check)
+    logger.info(
+        "应用组件初始化完成，Provider=%s，启动状态=%s",
+        type(public_search_provider).__name__,
+        startup_check.status,
+    )
     return ApplicationServices(
         config=selected_config,
         public_search_provider=public_search_provider,

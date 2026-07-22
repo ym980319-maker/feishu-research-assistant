@@ -58,6 +58,8 @@ def check_configuration(config: AppConfig) -> ConfigurationCheck:
         "FEISHU_MARKET_TABLE_ID": config.feishu.market_table_id,
         "FEISHU_DOC_FOLDER_TOKEN": config.feishu.doc_folder_token,
     }
+    if config.server.environment == "production":
+        required["TAVILY_API_KEY"] = optional.pop("TAVILY_API_KEY")
     missing_required = tuple(name for name, value in required.items() if not value)
     missing_optional = tuple(name for name, value in optional.items() if not value)
     if missing_required:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from app.adapters.feishu_event_handler import create_feishu_event_handler
@@ -16,6 +17,7 @@ from app.bootstrap import (
 from app.config import AppConfig, load_config
 from app.models.request import ResearchRequest
 from app.models.response import ResearchResponse
+from app.logging_config import configure_logging
 from app.router.task_router import (
     DAILY_REPORT,
     FUND_ANALYSIS,
@@ -28,6 +30,7 @@ from app.router.task_router import (
 
 
 RuntimeHandler = Callable[..., Awaitable[str]]
+logger = logging.getLogger(__name__)
 
 TASK_TYPE_ALIASES = {
     "sentiment_analysis": SENTIMENT_ANALYSIS,
@@ -169,7 +172,22 @@ def run_server(
 ) -> None:
     """Initialize production components strictly and run until terminated."""
     selected_config = config or load_config()
-    services = initialize_services(selected_config, strict_startup=True)
+    configure_logging()
+    logger.info(
+        "准备启动 Research Assistant 服务，运行环境=%s，监听地址=%s:%s",
+        selected_config.server.environment,
+        selected_config.server.host,
+        selected_config.server.port,
+    )
+    try:
+        services = initialize_services(selected_config, strict_startup=True)
+    except Exception as exc:
+        logger.error(
+            "服务初始化失败，异常类型=%s，原因=%s",
+            type(exc).__name__,
+            exc,
+        )
+        raise
     application = create_server_app(
         config=selected_config,
         services=services,
@@ -188,6 +206,7 @@ def run_server(
         host=selected_config.server.host,
         port=selected_config.server.port,
     )
+    logger.info("Research Assistant 服务已停止")
 
 
 def _build_default_app() -> Any | None:
@@ -203,7 +222,15 @@ app = _build_default_app()
 
 
 def main() -> None:
-    run_server()
+    try:
+        run_server()
+    except Exception as exc:
+        logger.critical(
+            "服务异常退出，异常类型=%s，原因=%s",
+            type(exc).__name__,
+            exc,
+        )
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

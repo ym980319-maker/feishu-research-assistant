@@ -51,6 +51,7 @@ class TavilyConfig:
 class ServerConfig:
     host: str = DEFAULT_SERVER_HOST
     port: int = DEFAULT_SERVER_PORT
+    environment: str = "development"
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +147,7 @@ def load_config(
         server=ServerConfig(
             host=_text(source, "HOST", DEFAULT_SERVER_HOST),
             port=_int(source, "PORT", DEFAULT_SERVER_PORT),
+            environment=_text(source, "APP_ENV", "development").lower(),
         ),
     )
 
