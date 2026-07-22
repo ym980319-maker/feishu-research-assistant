@@ -94,6 +94,9 @@ class ServerEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response, {"status": "ok"})
 
+    def test_feishu_event_endpoint_is_registered(self) -> None:
+        self.assertIn("/feishu/events", self.application.endpoints)
+
     async def test_research_endpoint_calls_research_assistant_router(self) -> None:
         response = await self.application.endpoints["/research"](
             ResearchRequest(
