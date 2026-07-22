@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.adapters.feishu_event_handler import create_feishu_event_handler
 from app.bootstrap import (
     ApplicationFactory,
     ApplicationServices,
@@ -51,6 +52,8 @@ class RuntimeDependencies:
     knowledge_provider: RuntimeHandler
     deep_report_handler: RuntimeHandler
     legacy_daily_handler: RuntimeHandler
+    reply_message_handler: RuntimeHandler | None = None
+    send_message_handler: RuntimeHandler | None = None
 
 
 def load_runtime_dependencies() -> RuntimeDependencies:
@@ -63,6 +66,7 @@ def load_runtime_dependencies() -> RuntimeDependencies:
         knowledge_provider=runtime.read_knowledge_records,
         deep_report_handler=runtime.generate_deep_report,
         legacy_daily_handler=runtime.handle_daily_report,
+        reply_message_handler=runtime.reply_feishu_message,
     )
 
 
@@ -138,6 +142,10 @@ def create_server_app(
     application = create_app(
         config=config,
         services=selected_services,
+        feishu_event_handler=create_feishu_event_handler(
+            selected_services,
+            runtime,
+        ),
         application_factory=application_factory,
         health_handler=health,
     )
