@@ -29,6 +29,8 @@ FEISHU_ADAPTER = APP_SERVICES.feishu_adapter
 # PROCESSED_MESSAGE_IDS：已经完整处理成功的消息
 PROCESSING_MESSAGE_IDS = set()
 PROCESSED_MESSAGE_IDS = set()
+BACKGROUND_TASKS = set()
+KNOWLEDGE_WRITE_TIMEOUT_SECONDS = 10
 
 TASK_TYPE_LABELS = {
     SENTIMENT_ANALYSIS: "舆情梳理",
@@ -1246,6 +1248,34 @@ async def write_knowledge_record(user_text: str, summary_text: str):
     await create_bitable_record(FEISHU_KNOWLEDGE_TABLE_ID, fields)
 
 
+async def write_knowledge_record_in_background(user_text: str, summary_text: str):
+    """Write file analysis to the knowledge base without blocking Feishu replies."""
+    print("开始写入知识库")
+    try:
+        await asyncio.wait_for(
+            write_knowledge_record(user_text, summary_text),
+            timeout=KNOWLEDGE_WRITE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        print(
+            "知识库写入失败:",
+            f"超过 {KNOWLEDGE_WRITE_TIMEOUT_SECONDS} 秒，已自动跳过",
+        )
+    except Exception as e:
+        print("知识库写入失败:", repr(e))
+    else:
+        print("知识库写入完成")
+
+
+def schedule_knowledge_record_write(user_text: str, summary_text: str):
+    task = asyncio.create_task(
+        write_knowledge_record_in_background(user_text, summary_text)
+    )
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
+    return task
+
+
 
 def extract_query_keyword(user_text: str) -> str:
     keyword = user_text
@@ -2392,6 +2422,7 @@ async def feishu_events(request: Request):
                 return {"code": 0, "msg": "file key missing"}
 
             file_reply_text = ""
+            knowledge_record = None
             try:
                 local_path = await download_feishu_message_file(message_id, file_key, file_name)
 
@@ -2406,18 +2437,11 @@ async def feishu_events(request: Request):
                     )
                 else:
                     summary_text = await summarize_file_with_kimi(file_name, file_text)
-                    system_tip = ""
-                    try:
-                        await write_knowledge_record(
-                            f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
-                            summary_text
-                        )
-                        system_tip = "\n\n【系统提示】本次文件摘要已写入飞书多维表格“知识库素材”，可用于后续报告。"
-                    except Exception as e:
-                        print("写入知识库素材失败:", repr(e))
-                        system_tip = f"\n\n【系统提示】写入知识库素材失败：{repr(e)}"
-
-                    file_reply_text = summary_text + system_tip
+                    file_reply_text = summary_text
+                    knowledge_record = (
+                        f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
+                        summary_text,
+                    )
             except Exception as e:
                 print("处理飞书文件失败:", repr(e))
                 file_reply_text = f"我收到了文件，但处理失败：{repr(e)}"
@@ -2425,6 +2449,10 @@ async def feishu_events(request: Request):
             # 每个文件事件只在这里回复一次，避免成功/异常分支重复发送。
             await reply_feishu_message(message_id, file_reply_text)
             PROCESSED_MESSAGE_IDS.add(message_id)
+
+            # 回复成功后再异步归档，知识库超时或失败均不影响用户收到摘要。
+            if knowledge_record:
+                schedule_knowledge_record_write(*knowledge_record)
 
             if len(PROCESSED_MESSAGE_IDS) > 1000:
                 PROCESSED_MESSAGE_IDS.clear()

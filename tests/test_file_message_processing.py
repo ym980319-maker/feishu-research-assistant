@@ -63,6 +63,14 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         main.PROCESSING_MESSAGE_IDS.clear()
         main.PROCESSED_MESSAGE_IDS.clear()
 
+    async def asyncTearDown(self) -> None:
+        tasks = tuple(main.BACKGROUND_TASKS)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        main.BACKGROUND_TASKS.clear()
+
     async def test_successful_file_event_replies_once_and_is_deduplicated(self) -> None:
         reply = AsyncMock()
         summarize = AsyncMock(return_value="Kimi 文件摘要")
@@ -86,6 +94,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
             write_knowledge,
         ), patch.object(main, "reply_feishu_message", reply):
             first = await main.feishu_events(_Request())
+            await asyncio.gather(*tuple(main.BACKGROUND_TASKS))
             second = await main.feishu_events(_Request())
 
         self.assertEqual(first, {"code": 0, "msg": "file processed"})
@@ -97,8 +106,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         summarize.assert_awaited_once_with("fund-report.pdf", "基金PDF正文")
         write_knowledge.assert_awaited_once()
         reply.assert_awaited_once()
-        self.assertIn("Kimi 文件摘要", reply.await_args.args[1])
-        self.assertIn("已写入飞书多维表格", reply.await_args.args[1])
+        self.assertEqual(reply.await_args.args[1], summarize.return_value)
 
     async def test_concurrent_feishu_retry_is_ignored_while_file_is_processing(self) -> None:
         started = asyncio.Event()
@@ -143,6 +151,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
             )
             release.set()
             first_result = await first_task
+            await asyncio.gather(*tuple(main.BACKGROUND_TASKS))
 
         self.assertEqual(first_result["msg"], "file processed")
         self.assertEqual(retry_result["msg"], "duplicate processing ignored")
@@ -157,8 +166,9 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
             ANY,
         )
 
-    async def test_knowledge_write_failure_has_initialized_system_tip(self) -> None:
+    async def test_knowledge_write_failure_does_not_change_summary_reply(self) -> None:
         reply = AsyncMock()
+        summary = AsyncMock(return_value="Kimi 文件摘要")
         with patch.object(
             main,
             "download_feishu_message_file",
@@ -170,20 +180,100 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             main,
             "summarize_file_with_kimi",
-            AsyncMock(return_value="Kimi 文件摘要"),
+            summary,
         ), patch.object(
             main,
             "write_knowledge_record",
             AsyncMock(side_effect=RuntimeError("table unavailable")),
         ), patch.object(main, "reply_feishu_message", reply):
             result = await main.feishu_events(_Request("knowledge-failure"))
+            await asyncio.gather(*tuple(main.BACKGROUND_TASKS))
 
         self.assertEqual(result["msg"], "file processed")
         reply.assert_awaited_once()
-        response_text = reply.await_args.args[1]
-        self.assertIn("Kimi 文件摘要", response_text)
-        self.assertIn("写入知识库素材失败", response_text)
-        self.assertNotIn("system_tip", response_text)
+        self.assertEqual(reply.await_args.args[1], summary.return_value)
+
+    async def test_slow_knowledge_write_does_not_block_reply_or_allow_retry(self) -> None:
+        write_started = asyncio.Event()
+        release_write = asyncio.Event()
+
+        async def slow_write(user_text: str, summary_text: str) -> None:
+            write_started.set()
+            await release_write.wait()
+
+        reply = AsyncMock()
+        with patch.object(
+            main,
+            "download_feishu_message_file",
+            AsyncMock(return_value="downloads/fund-report.pdf"),
+        ) as download, patch.object(
+            main,
+            "extract_text_from_file",
+            return_value="基金PDF正文",
+        ), patch.object(
+            main,
+            "summarize_file_with_kimi",
+            AsyncMock(return_value="Kimi 文件摘要"),
+        ) as summarize, patch.object(
+            main,
+            "write_knowledge_record",
+            side_effect=slow_write,
+        ) as write_knowledge, patch.object(main, "reply_feishu_message", reply):
+            first_result = await main.feishu_events(_Request("slow-knowledge-write"))
+            reply.assert_awaited_once_with("slow-knowledge-write", "Kimi 文件摘要")
+
+            await write_started.wait()
+            retry_result = await main.feishu_events(_Request("slow-knowledge-write"))
+
+            release_write.set()
+            await asyncio.gather(*tuple(main.BACKGROUND_TASKS))
+
+        self.assertEqual(first_result["msg"], "file processed")
+        self.assertEqual(retry_result["msg"], "duplicate completed ignored")
+        download.assert_awaited_once()
+        summarize.assert_awaited_once()
+        write_knowledge.assert_awaited_once()
+        reply.assert_awaited_once()
+
+    async def test_knowledge_write_timeout_is_logged_and_skipped(self) -> None:
+        never_finishes = asyncio.Event()
+        self.assertEqual(main.KNOWLEDGE_WRITE_TIMEOUT_SECONDS, 10)
+
+        async def hanging_write(user_text: str, summary_text: str) -> None:
+            await never_finishes.wait()
+
+        with patch.object(
+            main,
+            "write_knowledge_record",
+            side_effect=hanging_write,
+        ), patch.object(
+            main,
+            "KNOWLEDGE_WRITE_TIMEOUT_SECONDS",
+            0.01,
+        ), patch("builtins.print") as print_log:
+            await main.write_knowledge_record_in_background("source", "summary")
+
+        messages = [
+            " ".join(str(value) for value in call.args)
+            for call in print_log.call_args_list
+        ]
+        self.assertTrue(any("开始写入知识库" in message for message in messages))
+        self.assertTrue(any("知识库写入失败" in message for message in messages))
+
+    async def test_knowledge_write_success_logs_completion(self) -> None:
+        with patch.object(
+            main,
+            "write_knowledge_record",
+            AsyncMock(),
+        ), patch("builtins.print") as print_log:
+            await main.write_knowledge_record_in_background("source", "summary")
+
+        messages = [
+            " ".join(str(value) for value in call.args)
+            for call in print_log.call_args_list
+        ]
+        self.assertTrue(any("开始写入知识库" in message for message in messages))
+        self.assertTrue(any("知识库写入完成" in message for message in messages))
 
     async def test_file_processing_failure_replies_once(self) -> None:
         reply = AsyncMock()
