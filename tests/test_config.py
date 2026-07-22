@@ -39,6 +39,7 @@ class ConfigTests(unittest.TestCase):
                 "TAVILY_TIMEOUT_SECONDS": "8.5",
                 "HOST": "127.0.0.1",
                 "PORT": "9000",
+                "APP_ENV": "production",
             },
             load_dotenv_file=False,
         )
@@ -63,6 +64,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tavily.timeout_seconds, 8.5)
         self.assertEqual(config.server.host, "127.0.0.1")
         self.assertEqual(config.server.port, 9000)
+        self.assertEqual(config.server.environment, "production")
 
     def test_uses_stable_defaults_without_environment_values(self) -> None:
         config = load_config({}, load_dotenv_file=False)
@@ -74,6 +76,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tavily.endpoint, DEFAULT_TAVILY_ENDPOINT)
         self.assertEqual(config.server.host, DEFAULT_SERVER_HOST)
         self.assertEqual(config.server.port, DEFAULT_SERVER_PORT)
+        self.assertEqual(config.server.environment, "development")
 
     def test_invalid_tavily_timeout_uses_default(self) -> None:
         config = load_config(
