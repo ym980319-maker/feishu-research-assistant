@@ -15,6 +15,8 @@ DEFAULT_KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_KIMI_MODEL = "kimi-k2.6"
 DEFAULT_TAVILY_ENDPOINT = "https://api.tavily.com/search"
 DEFAULT_TAVILY_TIMEOUT_SECONDS = 20.0
+DEFAULT_SERVER_HOST = "0.0.0.0"
+DEFAULT_SERVER_PORT = 8000
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,11 +48,18 @@ class TavilyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ServerConfig:
+    host: str = DEFAULT_SERVER_HOST
+    port: int = DEFAULT_SERVER_PORT
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     feishu: FeishuConfig
     kimi: ModelConfig
     deepseek: ModelConfig
     tavily: TavilyConfig
+    server: ServerConfig
 
 
 def _text(environ: Mapping[str, str], name: str, default: str = "") -> str:
@@ -69,6 +78,21 @@ def _float(
     except (TypeError, ValueError):
         return default
     return value if value >= minimum else default
+
+
+def _int(
+    environ: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 65535,
+) -> int:
+    try:
+        value = int(environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if minimum <= value <= maximum else default
 
 
 def load_config(
@@ -118,6 +142,10 @@ def load_config(
                 "TAVILY_TIMEOUT_SECONDS",
                 DEFAULT_TAVILY_TIMEOUT_SECONDS,
             ),
+        ),
+        server=ServerConfig(
+            host=_text(source, "HOST", DEFAULT_SERVER_HOST),
+            port=_int(source, "PORT", DEFAULT_SERVER_PORT),
         ),
     )
 

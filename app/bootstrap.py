@@ -23,6 +23,7 @@ from app.services.research_assistant_service import handle_research_assistant
 
 
 EventHandler = Callable[[Any], Awaitable[Any]]
+HealthHandler = Callable[[], Awaitable[Any]]
 ApplicationFactory = Callable[..., Any]
 ResearchAssistantHandler = Callable[..., Awaitable[Any]]
 
@@ -78,6 +79,7 @@ def create_app(
     feishu_event_handler: EventHandler | None = None,
     application_factory: ApplicationFactory | None = None,
     strict_startup: bool = False,
+    health_handler: HealthHandler | None = None,
 ) -> Any:
     """Build the ASGI app, initialize services and register transport routes."""
     selected_services = services or initialize_services(
@@ -89,9 +91,10 @@ def create_app(
 
         application_factory = FastAPI
     application = application_factory(title="Feishu Research Assistant")
-    application.get("/health")(
-        create_health_handler(selected_services.startup_check)
+    selected_health_handler = health_handler or create_health_handler(
+        selected_services.startup_check
     )
+    application.get("/health")(selected_health_handler)
     if feishu_event_handler is not None:
         register_feishu_routes(application, feishu_event_handler)
 

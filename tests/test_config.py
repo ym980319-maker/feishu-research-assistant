@@ -8,6 +8,8 @@ from app.config import (
     DEFAULT_FEISHU_TENANT_DOMAIN,
     DEFAULT_KIMI_BASE_URL,
     DEFAULT_KIMI_MODEL,
+    DEFAULT_SERVER_HOST,
+    DEFAULT_SERVER_PORT,
     DEFAULT_TAVILY_ENDPOINT,
     load_config,
 )
@@ -35,6 +37,8 @@ class ConfigTests(unittest.TestCase):
                 "TAVILY_API_KEY": "tavily-key",
                 "TAVILY_SEARCH_URL": "https://tavily.example.com/search",
                 "TAVILY_TIMEOUT_SECONDS": "8.5",
+                "HOST": "127.0.0.1",
+                "PORT": "9000",
             },
             load_dotenv_file=False,
         )
@@ -57,6 +61,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tavily.api_key, "tavily-key")
         self.assertEqual(config.tavily.endpoint, "https://tavily.example.com/search")
         self.assertEqual(config.tavily.timeout_seconds, 8.5)
+        self.assertEqual(config.server.host, "127.0.0.1")
+        self.assertEqual(config.server.port, 9000)
 
     def test_uses_stable_defaults_without_environment_values(self) -> None:
         config = load_config({}, load_dotenv_file=False)
@@ -66,6 +72,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.kimi.model, DEFAULT_KIMI_MODEL)
         self.assertEqual(config.deepseek.base_url, DEFAULT_DEEPSEEK_BASE_URL)
         self.assertEqual(config.tavily.endpoint, DEFAULT_TAVILY_ENDPOINT)
+        self.assertEqual(config.server.host, DEFAULT_SERVER_HOST)
+        self.assertEqual(config.server.port, DEFAULT_SERVER_PORT)
 
     def test_invalid_tavily_timeout_uses_default(self) -> None:
         config = load_config(
