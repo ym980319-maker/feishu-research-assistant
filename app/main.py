@@ -1,6 +1,7 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from datetime import datetime
+import asyncio
 import json
 import re
 import uuid
@@ -2350,6 +2351,7 @@ async def feishu_events(request: Request):
     print("Received Feishu event:", body)
 
     message_id = None
+    owns_processing_slot = False
 
     try:
         research_task = FEISHU_ADAPTER.to_research_task(
@@ -2360,7 +2362,20 @@ async def feishu_events(request: Request):
         message_id = research_task.message_id
         message_type = research_task.message_type
 
-        # 先识别文件消息：第一阶段只打印 file_key，方便后续下载
+        # 文件处理也可能超过飞书重试等待时间，因此所有消息必须先经过同一去重门槛。
+        if message_id in PROCESSED_MESSAGE_IDS:
+            print("Duplicate completed message ignored:", message_id)
+            return {"code": 0, "msg": "duplicate completed ignored"}
+
+        if message_id in PROCESSING_MESSAGE_IDS:
+            print("Duplicate processing message ignored:", message_id)
+            return {"code": 0, "msg": "duplicate processing ignored"}
+
+        if message_id:
+            PROCESSING_MESSAGE_IDS.add(message_id)
+            owns_processing_slot = True
+
+        # 先识别文件消息，保留现有下载、解析、Kimi 摘要和知识库写入流程。
         if message_id and message_type in ["file", "media"]:
             file_info = extract_file_info_from_message(message)
             print("Received Feishu file message:", file_info)
@@ -2373,45 +2388,46 @@ async def feishu_events(request: Request):
                     message_id,
                     "我收到了文件消息，但没有识别到 file_key，暂时无法下载。"
                 )
+                PROCESSED_MESSAGE_IDS.add(message_id)
                 return {"code": 0, "msg": "file key missing"}
 
+            file_reply_text = ""
             try:
                 local_path = await download_feishu_message_file(message_id, file_key, file_name)
 
                 file_text = extract_text_from_file(local_path, max_chars=20000)
 
                 if not file_text.strip():
-                    await reply_feishu_message(
-                        message_id,
+                    file_reply_text = (
                         "我已下载文件，但没有成功提取正文。\n"
                         f"文件名：{file_name}\n"
                         f"保存路径：{local_path}\n\n"
                         "可能原因：PDF 是扫描件、文件加密、格式暂不支持，或文件内容无法直接提取。"
                     )
-                    return {"code": 0, "msg": "file downloaded but no text"}
+                else:
+                    summary_text = await summarize_file_with_kimi(file_name, file_text)
+                    system_tip = ""
+                    try:
+                        await write_knowledge_record(
+                            f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
+                            summary_text
+                        )
+                        system_tip = "\n\n【系统提示】本次文件摘要已写入飞书多维表格“知识库素材”，可用于后续报告。"
+                    except Exception as e:
+                        print("写入知识库素材失败:", repr(e))
+                        system_tip = f"\n\n【系统提示】写入知识库素材失败：{repr(e)}"
 
-                summary_text = await summarize_file_with_kimi(file_name, file_text)
-
-                try:
-                    await write_knowledge_record(
-                        f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
-                        summary_text
-                    )
-                    system_tip = "\n\n【系统提示】本次文件摘要已写入飞书多维表格“知识库素材”，可用于后续报告。"
-                except Exception as e:
-                    print("写入知识库素材失败:", repr(e))
-                    system_tip = f"\n\n【系统提示】写入知识库素材失败：{repr(e)}"
-
-                await reply_feishu_message(
-                    message_id,
-                    summary_text + system_tip
-                )
+                    file_reply_text = summary_text + system_tip
             except Exception as e:
-                print("下载飞书文件失败:", repr(e))
-                await reply_feishu_message(
-                    message_id,
-                    f"我收到了文件，但下载失败：{repr(e)}"
-                )
+                print("处理飞书文件失败:", repr(e))
+                file_reply_text = f"我收到了文件，但处理失败：{repr(e)}"
+
+            # 每个文件事件只在这里回复一次，避免成功/异常分支重复发送。
+            await reply_feishu_message(message_id, file_reply_text)
+            PROCESSED_MESSAGE_IDS.add(message_id)
+
+            if len(PROCESSED_MESSAGE_IDS) > 1000:
+                PROCESSED_MESSAGE_IDS.clear()
 
             return {"code": 0, "msg": "file processed"}
 
@@ -2419,18 +2435,6 @@ async def feishu_events(request: Request):
         if not message_id or message_type != "text":
             print("Unsupported message type:", message_type, message)
             return {"code": 0, "msg": "ok"}
-
-        # 已完整处理过的消息，直接忽略
-        if message_id in PROCESSED_MESSAGE_IDS:
-            print("Duplicate completed message ignored:", message_id)
-            return {"code": 0, "msg": "duplicate completed ignored"}
-
-        # 正在处理中的消息，说明是飞书重试，先忽略，避免重复生成
-        if message_id in PROCESSING_MESSAGE_IDS:
-            print("Duplicate processing message ignored:", message_id)
-            return {"code": 0, "msg": "duplicate processing ignored"}
-
-        PROCESSING_MESSAGE_IDS.add(message_id)
 
         user_text = research_task.user_text
 
@@ -2504,7 +2508,7 @@ async def feishu_events(request: Request):
         print("处理飞书事件失败:", repr(e))
 
     finally:
-        if message_id:
+        if message_id and owns_processing_slot:
             PROCESSING_MESSAGE_IDS.discard(message_id)
 
     return {"code": 0, "msg": "ok"}
