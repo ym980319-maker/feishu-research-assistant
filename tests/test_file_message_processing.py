@@ -5,7 +5,7 @@ import json
 import sys
 import unittest
 from types import ModuleType
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, mock_open, patch
 
 
 class _FastAPI:
@@ -107,6 +107,42 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         write_knowledge.assert_awaited_once()
         reply.assert_awaited_once()
         self.assertEqual(reply.await_args.args[1], summarize.return_value)
+
+    async def test_download_file_has_os_available_for_path_creation(self) -> None:
+        response = MagicMock(status_code=200, content=b"pdf-content", text="")
+        client = AsyncMock()
+        client.get.return_value = response
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+        file_handle = mock_open()
+
+        with patch.object(
+            main,
+            "get_tenant_access_token",
+            AsyncMock(return_value="tenant-token"),
+        ), patch.object(
+            main.httpx,
+            "AsyncClient",
+            return_value=context,
+        ), patch.object(
+            main.os,
+            "makedirs",
+        ) as makedirs, patch.object(
+            main.os.path,
+            "join",
+            return_value="downloads/fund-report.pdf",
+        ) as join_path, patch("builtins.open", file_handle):
+            result = await main.download_feishu_message_file(
+                "message-id",
+                "file-key",
+                "fund-report.pdf",
+            )
+
+        self.assertEqual(result, "downloads/fund-report.pdf")
+        makedirs.assert_called_once_with("downloads", exist_ok=True)
+        join_path.assert_called_once_with("downloads", "fund-report.pdf")
+        file_handle.assert_called_once_with("downloads/fund-report.pdf", "wb")
+        file_handle().write.assert_called_once_with(b"pdf-content")
 
     async def test_concurrent_feishu_retry_is_ignored_while_file_is_processing(self) -> None:
         started = asyncio.Event()
