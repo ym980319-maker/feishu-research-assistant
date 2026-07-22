@@ -127,19 +127,20 @@ class ResearchAssistantServiceTests(unittest.IsolatedAsyncioTestCase):
         self.kimi.assert_awaited_once()
         prompt = self.kimi.await_args.args[0]
         for required in (
-            "《基金投资决策报告》",
-            "一、产品基本信息",
-            "二、管理人分析",
-            "三、基金经理分析",
-            "四、投资策略分析",
-            "五、历史业绩分析",
-            "六、风险分析",
-            "七、市场环境分析",
-            "八、投资建议",
+            "# 产品尽调分析报告",
+            "## 一、产品基本信息",
+            "## 二、产品定位与投资逻辑",
+            "## 三、投资策略拆解",
+            "## 四、历史表现与风险指标",
+            "## 五、资产配置与组合价值",
+            "## 六、风险分析",
+            "## 七、管理人与团队分析",
+            "## 八、投资价值判断",
             "公开资料未找到",
             "不允许编造基金规模",
             "收益率",
             "持仓",
+            "材料未披露，无法判断",
         ):
             self.assertIn(required, prompt)
 
