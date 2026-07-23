@@ -199,9 +199,18 @@ async def reply_feishu_message(message_id: str, text: str):
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json; charset=utf-8",
     }
+    markdown_text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     payload = {
-        "msg_type": "text",
-        "content": json.dumps({"text": text}, ensure_ascii=False),
+        "msg_type": "post",
+        "content": json.dumps(
+            {
+                "zh_cn": {
+                    "title": "",
+                    "content": [[{"tag": "md", "text": markdown_text}]],
+                }
+            },
+            ensure_ascii=False,
+        ),
     }
 
     async with httpx.AsyncClient(timeout=10) as client:

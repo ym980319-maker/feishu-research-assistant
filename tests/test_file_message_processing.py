@@ -117,6 +117,34 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         reply.assert_awaited_once()
         self.assertEqual(reply.await_args.args[1], summarize.return_value)
 
+    async def test_reply_uses_post_markdown_and_preserves_newlines(self) -> None:
+        response = MagicMock()
+        response.json.return_value = {"code": 0}
+        client = AsyncMock()
+        client.post.return_value = response
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+        markdown = "# 产品尽调分析报告\r\n\r\n## 一、产品概况\r\n**报告声明**"
+
+        with patch.object(
+            main,
+            "get_tenant_access_token",
+            AsyncMock(return_value="tenant-token"),
+        ), patch.object(main.httpx, "AsyncClient", return_value=context):
+            result = await main.reply_feishu_message("message-1", markdown)
+
+        self.assertEqual(result, {"code": 0})
+        payload = client.post.await_args.kwargs["json"]
+        self.assertEqual(payload["msg_type"], "post")
+        rich_text = json.loads(payload["content"])["zh_cn"]
+        self.assertEqual(rich_text["title"], "")
+        markdown_node = rich_text["content"][0][0]
+        self.assertEqual(markdown_node["tag"], "md")
+        self.assertEqual(
+            markdown_node["text"],
+            "# 产品尽调分析报告\n\n## 一、产品概况\n**报告声明**",
+        )
+
     async def test_download_file_has_os_available_for_path_creation(self) -> None:
         response = MagicMock(status_code=200, content=b"pdf-content", text="")
         client = AsyncMock()
