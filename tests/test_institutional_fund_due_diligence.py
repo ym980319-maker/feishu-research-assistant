@@ -105,6 +105,8 @@ class InstitutionalFundDueDiligenceTests(unittest.IsolatedAsyncioTestCase):
         prompt = model.await_args.args[0]
 
         model.assert_awaited_once()
+        self.assertIn("【原始文件正文 1】", prompt)
+        self.assertIn(INSTITUTIONAL_PRODUCT_TEXT.strip(), prompt)
         self.assertIn('"产品信息":', prompt)
         self.assertIn("示例稳健增强产品", prompt)
         self.assertIn('"投资策略":', prompt)

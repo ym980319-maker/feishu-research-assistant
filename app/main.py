@@ -2437,6 +2437,7 @@ async def feishu_events(request: Request):
                     else:
                         file_task = route_task(f"{file_name}\n{file_text[:4000]}")
                         if file_task == FUND_ANALYSIS:
+                            print("基金分析输入文本长度:", len(file_text))
                             file_reply_text = await handle_fund_analysis(
                                 f"请基于上传文件生成机构产品尽调分析：{file_name}",
                                 call_kimi,

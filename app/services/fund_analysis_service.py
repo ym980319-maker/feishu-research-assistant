@@ -27,7 +27,22 @@ async def handle_fund_analysis(
 ) -> str:
     structured_documents = documents
     if documents is not None:
-        structured_documents = FundDocumentService().extract_json(documents)
+        structured_json = FundDocumentService().extract_json(documents)
+        if isinstance(documents, str):
+            raw_documents = [documents]
+        else:
+            raw_documents = [
+                str(document or "").strip()
+                for document in documents
+                if str(document or "").strip()
+            ]
+        structured_documents = [
+            f"【结构化字段提取】\n{structured_json}",
+            *(
+                f"【原始文件正文 {index}】\n{document}"
+                for index, document in enumerate(raw_documents, start=1)
+            ),
+        ]
     return await generate_fund_investment_decision(
         message,
         model_handler,

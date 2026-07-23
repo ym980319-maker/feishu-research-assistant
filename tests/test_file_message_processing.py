@@ -180,7 +180,9 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
             main,
             "write_knowledge_record",
             write_knowledge,
-        ), patch.object(main, "reply_feishu_message", reply):
+        ), patch.object(main, "reply_feishu_message", reply), patch(
+            "builtins.print"
+        ) as print_log:
             first = await main.feishu_events(
                 _Request("fund-file-message", "某基金合同.pdf")
             )
@@ -200,6 +202,16 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         summarize.assert_not_awaited()
         write_knowledge.assert_awaited_once()
         reply.assert_awaited_once_with("fund-file-message", "基金产品尽调分析报告")
+        messages = [
+            " ".join(str(value) for value in call.args)
+            for call in print_log.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                f"基金分析输入文本长度: {len(file_text)}" in message
+                for message in messages
+            )
+        )
 
     async def test_concurrent_feishu_retry_is_ignored_while_file_is_processing(self) -> None:
         started = asyncio.Event()

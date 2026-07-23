@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.models.evidence import Evidence
 from app.services.fund_investment_decision_service import (
@@ -183,6 +183,33 @@ class FundInvestmentDecisionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("公开资料未找到", prompt)
         self.assertIn("未提供基金合同、募集说明书或定期报告", prompt)
         self.assertIn("暂无相关知识库材料", prompt)
+
+    async def test_kimi_prompt_receives_document_body_and_logs_length(self) -> None:
+        documents = "PDF完整正文：投资范围包括利率债和高等级信用债。"
+        model = AsyncMock(return_value="基金尽调报告")
+
+        with patch("builtins.print") as print_log:
+            await generate_fund_investment_decision(
+                "示例基金",
+                model,
+                AsyncMock(return_value=""),
+                documents=documents,
+                evidence_researcher=AsyncMock(return_value={}),
+            )
+
+        prompt = model.await_args.args[0]
+        formatted_documents = format_fund_documents(documents)
+        self.assertIn(documents, prompt)
+        messages = [
+            " ".join(str(value) for value in call.args)
+            for call in print_log.call_args_list
+        ]
+        self.assertTrue(
+            any(
+                f"Kimi收到的正文长度: {len(formatted_documents)}" in message
+                for message in messages
+            )
+        )
 
     def test_optional_documents_are_formatted_without_fabrication(self) -> None:
         self.assertEqual(

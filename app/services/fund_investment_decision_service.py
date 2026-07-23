@@ -141,6 +141,9 @@ async def generate_fund_investment_decision(
         print("读取基金研究知识库材料失败，使用空材料继续:", type(exc).__name__)
         knowledge_text = ""
 
+    formatted_documents = format_fund_documents(documents)
+    print("Kimi收到的正文长度:", len(formatted_documents))
+
     prompt = f"""
 你是一名服务于银行、保险、理财子、券商资管和基金投委会的机构产品尽调研究员。
 请严格依据以下输入，为该产品生成一份正式的机构投资者《产品尽调分析报告》：
@@ -149,7 +152,7 @@ async def generate_fund_investment_decision(
 {fund_name or '未提供基金名称'}
 
 【基金合同、募集说明书或定期报告】
-{format_fund_documents(documents)}
+{formatted_documents}
 
 【基金数据 Provider】
 数据来源：{FUND_DATA_SOURCE}
