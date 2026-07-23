@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -136,14 +137,12 @@ class FundInvestmentDecisionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task_type, "基金产品研究")
         for section in (
             "# 产品尽调分析报告",
-            "## 一、产品基本信息",
-            "## 二、产品定位与投资逻辑",
-            "## 三、投资策略拆解",
-            "## 四、历史表现与风险指标",
-            "## 五、资产配置与组合价值",
-            "## 六、风险分析",
-            "## 七、管理人与团队分析",
-            "## 八、投资价值判断",
+            "## 一、产品概况",
+            "## 二、投资策略与收益来源分析",
+            "## 三、历史业绩分析",
+            "## 四、风险分析",
+            "## 五、组合配置价值分析",
+            "## 六、投资结论",
         ):
             self.assertIn(section, prompt)
         for required in (
@@ -158,9 +157,9 @@ class FundInvestmentDecisionServiceTests(unittest.IsolatedAsyncioTestCase):
             "X亿元",
             "Xbp",
             "XX公司",
-            "材料未披露，无法判断",
-            "这个产品靠什么赚钱",
-            "### 建议进一步核查事项",
+            "材料未披露",
+            "产品主要收益来源",
+            "### 需要进一步尽调的问题",
         ):
             self.assertIn(required, prompt)
 
@@ -183,6 +182,50 @@ class FundInvestmentDecisionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("公开资料未找到", prompt)
         self.assertIn("未提供基金合同、募集说明书或定期报告", prompt)
         self.assertIn("暂无相关知识库材料", prompt)
+
+    async def test_kimi_timeout_is_retried_once_then_succeeds(self) -> None:
+        call_count = 0
+
+        async def model(prompt: str, task_type: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await asyncio.sleep(1)
+            return "重试后生成的基金尽调报告"
+
+        with patch(
+            "app.services.fund_investment_decision_service."
+            "FUND_KIMI_TIMEOUT_SECONDS",
+            0.01,
+        ):
+            result = await generate_fund_investment_decision(
+                "示例基金",
+                model,
+                AsyncMock(return_value=""),
+                evidence_researcher=AsyncMock(return_value={}),
+            )
+
+        self.assertEqual(result, "重试后生成的基金尽调报告")
+        self.assertEqual(call_count, 2)
+
+    async def test_repeated_kimi_timeout_returns_friendly_message(self) -> None:
+        model = AsyncMock(
+            side_effect=[
+                "调用 Kimi 超时，请稍后重试",
+                "调用 Kimi 超时，请稍后重试",
+            ]
+        )
+
+        result = await generate_fund_investment_decision(
+            "示例基金",
+            model,
+            AsyncMock(return_value=""),
+            evidence_researcher=AsyncMock(return_value={}),
+        )
+
+        self.assertEqual(model.await_count, 2)
+        self.assertIn("已自动重试一次", result)
+        self.assertIn("请稍后重新提交", result)
 
     async def test_kimi_prompt_receives_document_body_and_logs_length(self) -> None:
         documents = "PDF完整正文：投资范围包括利率债和高等级信用债。"

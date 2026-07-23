@@ -50,14 +50,12 @@ class InstitutionalFundDueDiligenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task_type, "基金产品研究")
         for section in (
             "# 产品尽调分析报告",
-            "## 一、产品基本信息",
-            "## 二、产品定位与投资逻辑",
-            "## 三、投资策略拆解",
-            "## 四、历史表现与风险指标",
-            "## 五、资产配置与组合价值",
-            "## 六、风险分析",
-            "## 七、管理人与团队分析",
-            "## 八、投资价值判断",
+            "## 一、产品概况",
+            "## 二、投资策略与收益来源分析",
+            "## 三、历史业绩分析",
+            "## 四、风险分析",
+            "## 五、组合配置价值分析",
+            "## 六、投资结论",
         ):
             self.assertIn(section, prompt)
 
@@ -66,29 +64,24 @@ class InstitutionalFundDueDiligenceTests(unittest.IsolatedAsyncioTestCase):
         prompt = model.await_args.args[0]
 
         for required in (
-            "这个产品靠什么赚钱",
-            "久期收益",
-            "信用利差",
-            "转债增强",
-            "仓位管理",
-            "久期管理",
-            "信用筛选",
-            "年化收益",
+            "产品主要收益来源",
+            "久期策略",
+            "信用策略",
+            "行业配置",
+            "区域配置",
+            "杠杆情况",
+            "衍生品或对冲工具",
+            "历史收益表现",
             "最大回撤",
-            "波动率",
-            "夏普比率",
+            "波动情况",
             "收益稳定性",
-            "固收增强",
-            "另类收益",
-            "权益替代",
-            "流动性管理",
-            "### 市场风险",
-            "### 信用风险",
-            "### 流动性风险",
-            "### 策略风险",
-            "### 配置价值",
-            "### 主要风险",
-            "### 建议进一步核查事项",
+            "集中度风险",
+            "策略失效风险",
+            "机构固收投资经理角度",
+            "### 产品优势",
+            "### 核心风险",
+            "### 配置建议",
+            "### 需要进一步尽调的问题",
         ):
             self.assertIn(required, prompt)
 
@@ -96,8 +89,8 @@ class InstitutionalFundDueDiligenceTests(unittest.IsolatedAsyncioTestCase):
         _, model = await self._generate()
         prompt = model.await_args.args[0]
 
-        self.assertIn("材料未披露，无法判断。", prompt)
-        self.assertIn("不得利用常识估算", prompt)
+        self.assertIn("材料未披露", prompt)
+        self.assertIn("不得自行计算", prompt)
         self.assertIn("不得推定产品具备相关能力", prompt)
 
     async def test_structured_document_and_final_report_share_one_kimi_call(self) -> None:
