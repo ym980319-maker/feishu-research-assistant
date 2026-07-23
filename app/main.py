@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.bootstrap import create_app, initialize_services
 from app.config import load_config
+from app.services.fund_analysis_service import handle_fund_analysis
 from app.router.task_router import (
     DAILY_REPORT,
     FUND_ANALYSIS,
@@ -2406,7 +2407,7 @@ async def feishu_events(request: Request):
             PROCESSING_MESSAGE_IDS.add(message_id)
             owns_processing_slot = True
 
-        # 先识别文件消息，保留现有下载、解析、Kimi 摘要和知识库写入流程。
+        # 先识别文件消息，再根据材料内容选择唯一的分析路径。
         if message_id and message_type in ["file", "media"]:
             file_info = extract_file_info_from_message(message)
             print("Received Feishu file message:", file_info)
@@ -2414,38 +2415,47 @@ async def feishu_events(request: Request):
             file_key = file_info.get("file_key")
             file_name = file_info.get("file_name") or "feishu_file"
 
-            if not file_key:
-                await reply_feishu_message(
-                    message_id,
-                    "我收到了文件消息，但没有识别到 file_key，暂时无法下载。"
-                )
-                PROCESSED_MESSAGE_IDS.add(message_id)
-                return {"code": 0, "msg": "file key missing"}
-
             file_reply_text = ""
             knowledge_record = None
-            try:
-                local_path = await download_feishu_message_file(message_id, file_key, file_name)
+            file_result_msg = "file processed"
+            if not file_key:
+                file_reply_text = "我收到了文件消息，但没有识别到 file_key，暂时无法下载。"
+                file_result_msg = "file key missing"
+            else:
+                try:
+                    local_path = await download_feishu_message_file(message_id, file_key, file_name)
 
-                file_text = extract_text_from_file(local_path, max_chars=20000)
+                    file_text = extract_text_from_file(local_path, max_chars=20000)
 
-                if not file_text.strip():
-                    file_reply_text = (
-                        "我已下载文件，但没有成功提取正文。\n"
-                        f"文件名：{file_name}\n"
-                        f"保存路径：{local_path}\n\n"
-                        "可能原因：PDF 是扫描件、文件加密、格式暂不支持，或文件内容无法直接提取。"
-                    )
-                else:
-                    summary_text = await summarize_file_with_kimi(file_name, file_text)
-                    file_reply_text = summary_text
-                    knowledge_record = (
-                        f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
-                        summary_text,
-                    )
-            except Exception as e:
-                print("处理飞书文件失败:", repr(e))
-                file_reply_text = f"我收到了文件，但处理失败：{repr(e)}"
+                    if not file_text.strip():
+                        file_reply_text = (
+                            "我已下载文件，但没有成功提取正文。\n"
+                            f"文件名：{file_name}\n"
+                            f"保存路径：{local_path}\n\n"
+                            "可能原因：PDF 是扫描件、文件加密、格式暂不支持，或文件内容无法直接提取。"
+                        )
+                    else:
+                        file_task = route_task(f"{file_name}\n{file_text[:4000]}")
+                        if file_task == FUND_ANALYSIS:
+                            file_reply_text = await handle_fund_analysis(
+                                f"请基于上传文件生成机构产品尽调分析：{file_name}",
+                                call_kimi,
+                                read_knowledge_records,
+                                APP_SERVICES.public_search_provider.search,
+                                documents=file_text,
+                            )
+                        else:
+                            file_reply_text = await summarize_file_with_kimi(
+                                file_name,
+                                file_text,
+                            )
+                        knowledge_record = (
+                            f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
+                            file_reply_text,
+                        )
+                except Exception as e:
+                    print("处理飞书文件失败:", repr(e))
+                    file_reply_text = f"我收到了文件，但处理失败：{repr(e)}"
 
             # 每个文件事件只在这里回复一次，避免成功/异常分支重复发送。
             await reply_feishu_message(message_id, file_reply_text)
@@ -2458,7 +2468,7 @@ async def feishu_events(request: Request):
             if len(PROCESSED_MESSAGE_IDS) > 1000:
                 PROCESSED_MESSAGE_IDS.clear()
 
-            return {"code": 0, "msg": "file processed"}
+            return {"code": 0, "msg": file_result_msg}
 
         # 只处理文本消息
         if not message_id or message_type != "text":

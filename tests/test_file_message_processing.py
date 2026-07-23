@@ -34,7 +34,11 @@ from app import main
 
 
 class _Request:
-    def __init__(self, message_id: str = "file-message-1") -> None:
+    def __init__(
+        self,
+        message_id: str = "file-message-1",
+        file_name: str = "research-report.pdf",
+    ) -> None:
         self.payload = {
             "event": {
                 "message": {
@@ -43,7 +47,7 @@ class _Request:
                     "content": json.dumps(
                         {
                             "file_key": "file-key-1",
-                            "file_name": "fund-report.pdf",
+                            "file_name": file_name,
                         }
                     ),
                 }
@@ -83,7 +87,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         ) as download, patch.object(
             main,
             "extract_text_from_file",
-            return_value="基金PDF正文",
+            return_value="普通研报正文",
         ), patch.object(
             main,
             "summarize_file_with_kimi",
@@ -92,7 +96,11 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
             main,
             "write_knowledge_record",
             write_knowledge,
-        ), patch.object(main, "reply_feishu_message", reply):
+        ), patch.object(
+            main,
+            "handle_fund_analysis",
+            AsyncMock(),
+        ) as fund_analysis, patch.object(main, "reply_feishu_message", reply):
             first = await main.feishu_events(_Request())
             await asyncio.gather(*tuple(main.BACKGROUND_TASKS))
             second = await main.feishu_events(_Request())
@@ -103,7 +111,8 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
             {"code": 0, "msg": "duplicate completed ignored"},
         )
         download.assert_awaited_once()
-        summarize.assert_awaited_once_with("fund-report.pdf", "基金PDF正文")
+        summarize.assert_awaited_once_with("research-report.pdf", "普通研报正文")
+        fund_analysis.assert_not_awaited()
         write_knowledge.assert_awaited_once()
         reply.assert_awaited_once()
         self.assertEqual(reply.await_args.args[1], summarize.return_value)
@@ -144,6 +153,54 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         file_handle.assert_called_once_with("downloads/fund-report.pdf", "wb")
         file_handle().write.assert_called_once_with(b"pdf-content")
 
+    async def test_fund_file_uses_only_fund_analysis_and_duplicate_replies_once(self) -> None:
+        reply = AsyncMock()
+        fund_analysis = AsyncMock(return_value="基金产品尽调分析报告")
+        summarize = AsyncMock(return_value="不应生成的通用摘要")
+        write_knowledge = AsyncMock()
+        file_text = "基金合同与募集说明书正文，包含投资策略、投资范围和风险因素。"
+
+        with patch.object(
+            main,
+            "download_feishu_message_file",
+            AsyncMock(return_value="downloads/fund-contract.pdf"),
+        ) as download, patch.object(
+            main,
+            "extract_text_from_file",
+            return_value=file_text,
+        ), patch.object(
+            main,
+            "handle_fund_analysis",
+            fund_analysis,
+        ), patch.object(
+            main,
+            "summarize_file_with_kimi",
+            summarize,
+        ), patch.object(
+            main,
+            "write_knowledge_record",
+            write_knowledge,
+        ), patch.object(main, "reply_feishu_message", reply):
+            first = await main.feishu_events(
+                _Request("fund-file-message", "某基金合同.pdf")
+            )
+            await asyncio.gather(*tuple(main.BACKGROUND_TASKS))
+            duplicate = await main.feishu_events(
+                _Request("fund-file-message", "某基金合同.pdf")
+            )
+
+        self.assertEqual(first, {"code": 0, "msg": "file processed"})
+        self.assertEqual(
+            duplicate,
+            {"code": 0, "msg": "duplicate completed ignored"},
+        )
+        download.assert_awaited_once()
+        fund_analysis.assert_awaited_once()
+        self.assertEqual(fund_analysis.await_args.kwargs["documents"], file_text)
+        summarize.assert_not_awaited()
+        write_knowledge.assert_awaited_once()
+        reply.assert_awaited_once_with("fund-file-message", "基金产品尽调分析报告")
+
     async def test_concurrent_feishu_retry_is_ignored_while_file_is_processing(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()
@@ -161,7 +218,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         ) as download, patch.object(
             main,
             "extract_text_from_file",
-            return_value="基金PDF正文",
+            return_value="普通研报正文",
         ), patch.object(
             main,
             "summarize_file_with_kimi",
@@ -212,7 +269,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(
             main,
             "extract_text_from_file",
-            return_value="基金PDF正文",
+            return_value="普通研报正文",
         ), patch.object(
             main,
             "summarize_file_with_kimi",
@@ -245,7 +302,7 @@ class FileMessageProcessingTests(unittest.IsolatedAsyncioTestCase):
         ) as download, patch.object(
             main,
             "extract_text_from_file",
-            return_value="基金PDF正文",
+            return_value="普通研报正文",
         ), patch.object(
             main,
             "summarize_file_with_kimi",
