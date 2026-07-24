@@ -16,6 +16,15 @@ from app.services.evidence_service import (
 ModelHandler = Callable[[str, str], Awaitable[str]]
 FundDocumentInput = str | Sequence[str] | None
 
+FUND_CODE_IN_TEXT = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+FUND_KIMI_TIMEOUT_SECONDS = 300.0
+FUND_KIMI_MAX_ATTEMPTS = 2
+FUND_KIMI_TIMEOUT_MESSAGE = (
+    "基金尽调报告生成超时，已自动重试一次但仍未完成。"
+    "请稍后重新提交，或适当精简材料后重试。"
+)
+
+
 FUND_PUBLIC_SEARCH_TOPICS = (
     "基金经理公开信息",
     "基金管理人公告",
@@ -97,6 +106,17 @@ async def generate_fund_investment_decision(
         print("读取基金研究知识库材料失败，使用空材料继续:", type(exc).__name__)
         knowledge_text = ""
 
+<<<<<<< HEAD
+=======
+    formatted_documents = format_fund_documents(documents)
+    if len(formatted_documents) > 12000:
+        formatted_documents = (
+            formatted_documents[:12000]
+            + "\n\n【正文已截断】"
+        )
+    print("Kimi收到的正文长度:", len(formatted_documents))
+
+>>>>>>> 7e64e5d (fix fund analysis timeout and knowledge fallback)
     prompt = f"""
 请为以下基金生成一份正式的《基金投资决策报告》：
 
