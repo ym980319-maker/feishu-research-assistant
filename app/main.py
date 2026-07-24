@@ -1189,10 +1189,10 @@ async def read_knowledge_records(limit: int = 10, user_text: str = "") -> str:
         if not keywords or any(k and k in searchable for k in keywords):
             filtered_items.append(item)
 
-    # 如果筛选后为空，退回使用最近几条，避免完全没有参考资料
+    # 如果筛选后为空，不返回其他历史素材，避免基金分析串入无关产品
     if not filtered_items:
-        print("No matched knowledge records, fallback to recent records")
-        filtered_items = items[:limit]
+        print("No matched knowledge records, return empty")
+        return ""
     else:
         filtered_items = filtered_items[:limit]
 
