@@ -97,6 +97,27 @@ async def generate_fund_investment_decision(
         print("读取基金研究知识库材料失败，使用空材料继续:", type(exc).__name__)
         knowledge_text = ""
 
+    formatted_documents = format_fund_documents(documents)
+    if len(formatted_documents) > 6000:
+        formatted_documents = (
+            formatted_documents[:6000]
+            + "\n\n【正文已截断】"
+        )
+
+    formatted_evidence = format_evidence_pool(evidence_pool)
+    if len(formatted_evidence) > 2000:
+        formatted_evidence = (
+            formatted_evidence[:2000]
+            + "\n\n【公开信息已截断】"
+        )
+
+    knowledge_text = str(knowledge_text or "")
+    if len(knowledge_text) > 1500:
+        knowledge_text = (
+            knowledge_text[:1500]
+            + "\n\n【知识库材料已截断】"
+        )
+
     prompt = f"""
 请为以下基金生成一份正式的《基金投资决策报告》：
 
@@ -104,9 +125,9 @@ async def generate_fund_investment_decision(
 {fund_name or '未提供基金名称'}
 
 【基金合同、募集说明书或定期报告】
-{format_fund_documents(documents)}
+{formatted_documents}
 
-{format_evidence_pool(evidence_pool)}
+{formatted_evidence}
 
 【基金公开资料状态】
 {'已获得可核验公开资料。' if evidence_pool else '公开资料未找到'}
