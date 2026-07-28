@@ -623,7 +623,7 @@ async def call_kimi(user_text: str, task_type: str) -> str:
 
     for attempt in range(2):
         try:
-            timeout = httpx.Timeout(connect=15, read=180, write=30, pool=15)
+            timeout = httpx.Timeout(connect=15, read=300, write=30, pool=15)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
@@ -640,8 +640,18 @@ async def call_kimi(user_text: str, task_type: str) -> str:
                 return "调用 Kimi 超时，请稍后重试"
             await asyncio.sleep(2)
 
+        except httpx.HTTPStatusError as exc:
+            print("Kimi HTTP error:", exc.response.status_code)
+            print("Kimi response body:", exc.response.text)
+
+            if exc.response.status_code == 429 and attempt == 0:
+                await asyncio.sleep(5)
+                continue
+
+            return "调用 Kimi 失败，请稍后重试"
+
         except Exception as exc:
-            print(f"Kimi request failed: {type(exc).__name__}")
+            print(f"Kimi request failed: {repr(exc)}")
             return "调用 Kimi 失败，请稍后重试"
 
 
@@ -2364,6 +2374,17 @@ async def feishu_events(request: Request):
 
         # 先识别文件消息：第一阶段只打印 file_key，方便后续下载
         if message_id and message_type in ["file", "media"]:
+
+            # 文件消息去重：防止飞书重试导致重复下载、重复Kimi分析、重复回复
+            if message_id in PROCESSED_MESSAGE_IDS:
+                print("Duplicate completed file message ignored:", message_id)
+                return {"code": 0, "msg": "duplicate completed file ignored"}
+
+            if message_id in PROCESSING_MESSAGE_IDS:
+                print("Duplicate processing file message ignored:", message_id)
+                return {"code": 0, "msg": "duplicate processing ignored"}
+
+            PROCESSING_MESSAGE_IDS.add(message_id)
             file_info = extract_file_info_from_message(message)
             print("Received Feishu file message:", file_info)
 
@@ -2392,17 +2413,34 @@ async def feishu_events(request: Request):
                     )
                     return {"code": 0, "msg": "file downloaded but no text"}
 
+                print("Start Kimi summary, text length:", len(file_text))
+
                 summary_text = await summarize_file_with_kimi(file_name, file_text)
+
+                print("Kimi summary finished, result length:", len(summary_text))
 
                 try:
                     await write_knowledge_record(
                         f"文件名：{file_name}\n\n正文节选：\n{file_text[:2000]}",
                         summary_text
                     )
-                    system_tip = "\n\n【系统提示】本次文件摘要已写入飞书多维表格“知识库素材”，可用于后续报告。"
+
+                    await write_report_record(
+                        file_name,
+                        summary_text,
+                        ""
+                    )
+
+                    system_tip = (
+                        "\n\n【系统提示】本次文件摘要已写入飞书多维表格"
+                        "“知识库素材”和“报告库”。"
+                    )
+
                 except Exception as e:
-                    print("写入知识库素材失败:", repr(e))
-                    system_tip = f"\n\n【系统提示】写入知识库素材失败：{repr(e)}"
+                    print("写入知识库或报告库失败:", repr(e))
+                    system_tip = (
+                        f"\n\n【系统提示】写入知识库或报告库失败：{repr(e)}"
+                    )
 
                 await reply_feishu_message(
                     message_id,
@@ -2414,6 +2452,9 @@ async def feishu_events(request: Request):
                     message_id,
                     f"我收到了文件，但下载失败：{repr(e)}"
                 )
+
+            PROCESSING_MESSAGE_IDS.discard(message_id)
+            PROCESSED_MESSAGE_IDS.add(message_id)
 
             return {"code": 0, "msg": "file processed"}
 
